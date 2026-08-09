@@ -1,0 +1,7 @@
+[package]
+name = "penna-adapters-fs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+penna-core = { path = "../../core" }
