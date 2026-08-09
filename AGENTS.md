@@ -12,9 +12,10 @@ Primary custom Copilot agent for this repository:
 
 The agent must read these documents in order, before any code change:
 
-1. `docs/ARCHITECTURE.md`. This document gives the layer rules and the dependency rule. It defines the engine/frontend separation.
-2. `docs/DATA_MODEL.md`. This document gives the `Entry` structure, the JSON sidecar format, and the frontmatter schema.
-3. All files in `docs/ADR/`. These files are the Architecture Decision Records. (Note: ADRs are being rewritten to reflect the new engine/frontend architecture.)
+1. `docs/ENGINE_SCOPE.md`. This document defines what engine is responsible for and what it must never own.
+2. `docs/ARCHITECTURE.md`. This document gives the layer rules and the dependency rule. It defines the engine/frontend separation.
+3. `docs/DATA_MODEL.md`. This document gives the `Entry` structure, the JSON sidecar format, and the frontmatter schema.
+4. All files in `docs/ADR/`. These files are the Architecture Decision Records. (Note: ADRs are being rewritten to reflect the new engine/frontend architecture.)
 
 The agent must check the existing ADRs before it proposes a decision. The agent must not propose a decision that an ADR already makes. These decisions include:
 

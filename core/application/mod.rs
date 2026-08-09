@@ -1,4 +1,5 @@
 pub mod create_entry;
+pub mod delete_entry;
 pub mod list_entries;
 pub mod get_entry;
 pub mod update_entry;
@@ -7,6 +8,7 @@ pub mod document_to_markdown;
 pub mod document_with_sidecar;
 
 pub use create_entry::{CreateEntryError, CreateEntryInput, CreateEntryUseCase};
+pub use delete_entry::DeleteEntryUseCase;
 pub use list_entries::ListEntriesUseCase;
 pub use get_entry::GetEntryUseCase;
 pub use update_entry::{UpdateEntryError, UpdateEntryInput, UpdateEntryUseCase};

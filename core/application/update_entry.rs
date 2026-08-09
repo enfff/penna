@@ -12,6 +12,7 @@ pub struct UpdateEntryInput {
     pub title: String,
     pub body: String,
     pub tags: Vec<String>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -30,7 +31,7 @@ impl<R: EntryRepository> UpdateEntryUseCase<R> {
             input.title,
             input.body,
             input.tags,
-            input.updated_at.clone(),
+            input.created_at,
             input.updated_at,
         )
         .map_err(UpdateEntryError::Domain)?;

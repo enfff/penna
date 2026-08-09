@@ -28,10 +28,11 @@ Execute coding work end-to-end in this repository while enforcing:
 
 ## Mandatory Read Order Before Code Changes
 
-1. [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)
-2. [docs/DATA_MODEL.md](../../docs/DATA_MODEL.md)
-3. [docs/ADR](../../docs/ADR)
-4. [AGENTS.md](../../AGENTS.md)
+1. [docs/ENGINE_SCOPE.md](../../docs/ENGINE_SCOPE.md)
+2. [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)
+3. [docs/DATA_MODEL.md](../../docs/DATA_MODEL.md)
+4. [docs/ADR](../../docs/ADR)
+5. [AGENTS.md](../../AGENTS.md)
 
 If the request conflicts with these files, stop and explain the conflict.
 

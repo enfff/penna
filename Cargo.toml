@@ -5,4 +5,5 @@ members = [
  "adapters/git",
  "adapters/fs",
  "adapters/markdown",
+ "engine",
 ]

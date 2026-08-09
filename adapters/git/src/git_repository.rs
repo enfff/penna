@@ -5,8 +5,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryStatus {
+    pub branch: Option<String>,
+    pub head_commit: Option<String>,
+    pub is_dirty: bool,
+}
+
+#[derive(Clone)]
 pub struct GitEntryRepository {
     repo: Arc<Mutex<Repository>>,
+    root: PathBuf,
 }
 
 impl GitEntryRepository {
@@ -23,13 +32,47 @@ impl GitEntryRepository {
 
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
+            root: path,
         })
     }
 
     pub fn with_existing_repo(repo: Repository) -> Self {
+        let root = repo.path().parent().map_or_else(PathBuf::new, PathBuf::from);
         Self {
             repo: Arc::new(Mutex::new(repo)),
+            root,
         }
+    }
+
+    pub fn repository_path(&self) -> &PathBuf {
+        &self.root
+    }
+
+    pub fn status(&self) -> Result<RepositoryStatus, RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+
+        let branch = match repo.head() {
+            Ok(head) if head.is_branch() => head.shorthand().map(ToOwned::to_owned),
+            _ => None,
+        };
+
+        let head_commit = match repo.head() {
+            Ok(head) => head
+                .target()
+                .map(|oid| oid.to_string()),
+            Err(_) => None,
+        };
+
+        let is_dirty = !repo
+            .statuses(None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get repo status: {}", e)))?
+            .is_empty();
+
+        Ok(RepositoryStatus {
+            branch,
+            head_commit,
+            is_dirty,
+        })
     }
 
     fn entry_path(&self, id: &str) -> PathBuf {

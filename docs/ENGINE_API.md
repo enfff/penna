@@ -1,0 +1,213 @@
+# ENGINE_API.md
+
+Purpose: frontend integration contract for Penna engine v1.
+
+## Scope
+
+Engine API is frontend-agnostic. Any frontend (web, desktop, mobile, CLI) calls these methods through host bridge (IPC/RPC/direct Rust binding).
+
+## Data Format Rules
+
+1. Entry files are plain Markdown only.
+2. Entry filename/id format is `YYYYMMDDHHmm.md`.
+3. Engine resolves same-minute collisions by moving to next available minute slot.
+
+## Methods
+
+### connect_journal
+
+Input:
+
+```json
+{ "repo_path": "/absolute/or/user-chosen/path" }
+```
+
+Output:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "repo_path": "/absolute/or/user-chosen/path"
+}
+```
+
+Behavior:
+
+1. Creates directory if missing.
+2. Opens existing git repo or initializes new one.
+3. Registers active engine session.
+
+### journal_status
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "repo_path": "/absolute/or/user-chosen/path",
+  "branch": "master",
+  "head_commit": "a1b2c3d4...",
+  "is_dirty": false,
+  "connected_at": "2026-08-09T11:17:42+00:00"
+}
+```
+
+### disconnect_journal
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{ "ok": true }
+```
+
+### list_entries
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{
+  "entries": [
+    {
+      "id": { "0": "202608091130" },
+      "title": "Entry title",
+      "body": "# Heading\n\nplain markdown",
+      "tags": ["work"],
+      "created_at": "2026-08-09T11:30:00+00:00",
+      "updated_at": "2026-08-09T11:30:00+00:00"
+    }
+  ]
+}
+```
+
+### get_entry
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000", "id": "202608091130" }
+```
+
+Output:
+
+```json
+{
+  "entry": {
+    "id": { "0": "202608091130" },
+    "title": "Entry title",
+    "body": "plain markdown",
+    "tags": [],
+    "created_at": "2026-08-09T11:30:00+00:00",
+    "updated_at": "2026-08-09T11:30:00+00:00"
+  }
+}
+```
+
+### create_entry
+
+Input:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "request": {
+    "title": "New entry",
+    "body": "plain markdown",
+    "tags": ["daily"]
+  }
+}
+```
+
+Output:
+
+```json
+{
+  "entry": {
+    "id": { "0": "202608091131" },
+    "title": "New entry",
+    "body": "plain markdown",
+    "tags": ["daily"],
+    "created_at": "2026-08-09T11:31:12+00:00",
+    "updated_at": "2026-08-09T11:31:12+00:00"
+  }
+}
+```
+
+### update_entry
+
+Input:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "request": {
+    "id": "202608091131",
+    "title": "Updated title",
+    "body": "updated plain markdown",
+    "tags": ["daily", "edited"]
+  }
+}
+```
+
+Output:
+
+```json
+{
+  "entry": {
+    "id": { "0": "202608091131" },
+    "title": "Updated title",
+    "body": "updated plain markdown",
+    "tags": ["daily", "edited"],
+    "created_at": "2026-08-09T11:31:12+00:00",
+    "updated_at": "2026-08-09T11:35:05+00:00"
+  }
+}
+```
+
+### delete_entry
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000", "id": "202608091131" }
+```
+
+Output:
+
+```json
+{ "ok": true }
+```
+
+## Error Contract
+
+Engine returns typed errors internally. Bridge should map to consistent frontend shape:
+
+```json
+{
+  "code": "NOT_CONNECTED|IO|REPO|VALIDATION|CONFLICT",
+  "message": "human readable detail"
+}
+```
+
+## Integration Notes
+
+1. Keep `session_id` in frontend state after successful connect.
+2. Do not call adapters directly from frontend.
+3. Run all entry operations via engine session methods.

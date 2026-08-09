@@ -1,0 +1,123 @@
+# Engine API Copy/Paste
+
+Use this as single source for frontend integration.
+
+## Rust Methods
+
+```rust
+pub fn connect_journal<P: AsRef<std::path::Path>>(&self, repo_path: P) -> Result<JournalSession, EngineError>;
+pub fn journal_status(&self, session_id: &str) -> Result<JournalStatus, EngineError>;
+pub fn disconnect_journal(&self, session_id: &str) -> Result<(), EngineError>;
+pub fn list_entries(&self, session_id: &str) -> Result<Vec<Entry>, EngineError>;
+pub fn get_entry(&self, session_id: &str, id: &str) -> Result<Option<Entry>, EngineError>;
+pub fn create_entry(&self, session_id: &str, request: CreateEntryRequest) -> Result<Entry, EngineError>;
+pub fn create_entry_api(&self, request: CreateEntryApiRequest) -> Result<EntryDto, EngineError>;
+pub fn update_entry(&self, session_id: &str, request: UpdateEntryRequest) -> Result<Entry, EngineError>;
+pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError>;
+```
+
+## DTOs
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JournalSession {
+    pub session_id: String,
+    pub repo_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JournalStatus {
+    pub session_id: String,
+    pub repo_path: String,
+    pub branch: Option<String>,
+    pub head_commit: Option<String>,
+    pub is_dirty: bool,
+    pub connected_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CreateEntryRequest {
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateEntryRequest {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CreateEntryApiRequest {
+  pub session_id: String,
+  pub title: String,
+  pub body: String,
+  pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EntryDto {
+  pub id: String,
+  pub title: String,
+  pub body: String,
+  pub tags: Vec<String>,
+  pub created_at: String,
+  pub updated_at: String,
+}
+```
+
+## JSON Payloads
+
+```json
+{
+  "connect_journal": { "repo_path": "/path/to/journal" },
+  "journal_status": { "session_id": "session-1754733553000000000" },
+  "disconnect_journal": { "session_id": "session-1754733553000000000" },
+  "list_entries": { "session_id": "session-1754733553000000000" },
+  "get_entry": {
+    "session_id": "session-1754733553000000000",
+    "id": "202608091130"
+  },
+  "create_entry": {
+    "session_id": "session-1754733553000000000",
+    "request": {
+      "title": "New entry",
+      "body": "plain markdown",
+      "tags": ["daily"]
+    }
+  },
+  "create_entry_api": {
+    "session_id": "session-1754733553000000000",
+    "title": "New entry",
+    "body": "plain markdown",
+    "tags": ["daily"]
+  },
+  "update_entry": {
+    "session_id": "session-1754733553000000000",
+    "request": {
+      "id": "202608091130",
+      "title": "Updated",
+      "body": "updated markdown",
+      "tags": ["daily", "edited"]
+    }
+  },
+  "delete_entry": {
+    "session_id": "session-1754733553000000000",
+    "id": "202608091130"
+  }
+}
+```
+
+## Quick Real Repo Test
+
+```bash
+cargo run -p penna-engine --example create_entry_api -- /home/enf/Projects/penna-myjournal "Test title" "Test body"
+```
+
+## File Naming Rule
+
+- Entry id and filename format: YYYYMMDDHHmm.md
+- Content format: plain markdown

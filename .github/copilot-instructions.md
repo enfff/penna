@@ -1,9 +1,10 @@
 # Copilot Instructions For Penna
 
 Read these documents before coding:
-1. docs/ARCHITECTURE.md
-2. docs/DATA_MODEL.md
-3. docs/ADR/
+1. docs/ENGINE_SCOPE.md
+2. docs/ARCHITECTURE.md
+3. docs/DATA_MODEL.md
+4. docs/ADR/
 
 ## Core principle
 
