@@ -11,4 +11,5 @@ penna-core = { path = "../core" }
 penna-adapters-git = { path = "../adapters/git" }
 
 [dev-dependencies]
+git2 = "0.19"
 tempfile = "3"

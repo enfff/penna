@@ -14,6 +14,7 @@ pub fn create_entry(&self, session_id: &str, request: CreateEntryRequest) -> Res
 pub fn create_entry_api(&self, request: CreateEntryApiRequest) -> Result<EntryDto, EngineError>;
 pub fn update_entry(&self, session_id: &str, request: UpdateEntryRequest) -> Result<Entry, EngineError>;
 pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError>;
+pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
 ```
 
@@ -82,6 +83,14 @@ pub struct SidecarIntegrityReport {
   pub actual_entry_id: Option<String>,
   pub reason: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SyncReport {
+  pub status: String,
+  pub branch: Option<String>,
+  pub ahead: Option<usize>,
+  pub behind: Option<usize>,
+}
 ```
 
 ## JSON Payloads
@@ -122,6 +131,9 @@ pub struct SidecarIntegrityReport {
   "delete_entry": {
     "session_id": "session-1754733553000000000",
     "id": "202608091130"
+  },
+  "sync_journal": {
+    "session_id": "session-1754733553000000000"
   },
   "sidecar_integrity_status": {
     "entry_id": "202608091130",

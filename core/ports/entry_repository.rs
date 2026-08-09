@@ -14,6 +14,20 @@ pub trait EntryRepository: Send + Sync {
     fn list(&self) -> Result<Vec<Entry>, RepositoryError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncResult {
+    UpToDate { branch: String },
+    NoRemote,
+    NoBranch,
+    Pulled { branch: String },
+    Pushed { branch: String },
+    Diverged { branch: String, ahead: usize, behind: usize },
+}
+
+pub trait JournalSync: Send + Sync {
+    fn sync(&self) -> Result<SyncResult, RepositoryError>;
+}
+
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

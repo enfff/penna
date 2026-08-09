@@ -40,6 +40,7 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 6. `create_entry(session_id, request)` -> create plain Markdown entry using `YYYYMMDDHHmm.md` id/filename pattern.
 7. `update_entry(session_id, request)` -> update existing entry while preserving `created_at`.
 8. `delete_entry(session_id, id)` -> delete entry.
+9. `sync_journal(session_id)` -> fetch/push journal state and report sync status.
 
 ## Source Of Truth Hierarchy
 
@@ -53,5 +54,5 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 
 1. Entry lifecycle v1: create/get/list/update/delete with strict invariants and tests.
 2. Plain Markdown storage contract that matches the real editor/frontend behavior.
-3. Sync API for pull/push or unified journal sync.
+3. Sync API for pull/push or unified journal sync with structured status reporting.
 4. Engine API surface that frontends can consume without touching adapters directly.

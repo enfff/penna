@@ -1,3 +1,6 @@
 pub mod entry_repository;
 
-pub use entry_repository::{EntryRepository, RepositoryError, FileSystem, FileSystemError, MarkdownImporter, MarkdownExporter};
+pub use entry_repository::{
+	EntryRepository, FileSystem, FileSystemError, JournalSync, MarkdownExporter,
+	MarkdownImporter, RepositoryError, SyncResult,
+};

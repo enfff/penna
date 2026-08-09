@@ -6,6 +6,7 @@ pub mod update_entry;
 pub mod markdown_to_document;
 pub mod document_to_markdown;
 pub mod document_with_sidecar;
+pub mod sync_journal;
 pub mod validate_sidecar_integrity;
 
 pub use create_entry::{CreateEntryError, CreateEntryInput, CreateEntryUseCase};
@@ -22,6 +23,7 @@ pub use document_to_markdown::{
 pub use document_with_sidecar::{
     DocumentWithSidecarError, DocumentWithSidecarInput, DocumentWithSidecarUseCase,
 };
+pub use sync_journal::SyncJournalUseCase;
 pub use validate_sidecar_integrity::{
     SidecarIntegrityStatus, SidecarSource, ValidateSidecarIntegrityUseCase,
 };

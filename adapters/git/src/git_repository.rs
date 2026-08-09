@@ -1,6 +1,6 @@
-use git2::{Repository, Signature};
+use git2::{build::CheckoutBuilder, Repository, Signature};
 use penna_core::domain::{Entry, EntryId};
-use penna_core::ports::{EntryRepository, RepositoryError};
+use penna_core::ports::{EntryRepository, JournalSync, RepositoryError, SyncResult};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -384,15 +384,121 @@ impl EntryRepository for GitEntryRepository {
     }
 }
 
+impl JournalSync for GitEntryRepository {
+    fn sync(&self) -> Result<SyncResult, RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+
+        let mut remote = match repo.find_remote("origin") {
+            Ok(remote) => remote,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(SyncResult::NoRemote),
+            Err(e) => {
+                return Err(RepositoryError::Storage(format!(
+                    "Failed to find origin remote: {}",
+                    e
+                )))
+            }
+        };
+
+        let branch = match repo.head() {
+            Ok(head) if head.is_branch() => head
+                .shorthand()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| RepositoryError::Storage("failed to resolve current branch".to_string()))?,
+            _ => return Ok(SyncResult::NoBranch),
+        };
+
+        let local_oid = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?
+            .id();
+
+        let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
+        remote
+            .fetch(&[&fetch_refspec], None, None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to fetch remote: {}", e)))?;
+
+        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_oid = match repo.find_reference(&remote_ref_name) {
+            Ok(reference) => reference.target().ok_or_else(|| {
+                RepositoryError::Storage("remote tracking reference has no target".to_string())
+            })?,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                remote.push(&[&push_refspec], None).map_err(|err| {
+                    RepositoryError::Storage(format!("Failed to push branch to remote: {}", err))
+                })?;
+                return Ok(SyncResult::Pushed { branch });
+            }
+            Err(e) => {
+                return Err(RepositoryError::Storage(format!(
+                    "Failed to read remote tracking branch: {}",
+                    e
+                )))
+            }
+        };
+
+        let (ahead, behind) = repo
+            .graph_ahead_behind(local_oid, remote_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
+
+        if ahead == 0 && behind == 0 {
+            return Ok(SyncResult::UpToDate { branch });
+        }
+
+        if ahead > 0 && behind > 0 {
+            return Ok(SyncResult::Diverged {
+                branch,
+                ahead,
+                behind,
+            });
+        }
+
+        if behind > 0 {
+            let local_ref_name = format!("refs/heads/{}", branch);
+            let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
+            })?;
+
+            local_ref.set_target(remote_oid, "penna sync fast-forward").map_err(|e| {
+                RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
+            })?;
+
+            repo.set_head(&local_ref_name)
+                .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
+
+            repo.checkout_head(Some(CheckoutBuilder::new().force()))
+                .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
+
+            return Ok(SyncResult::Pulled { branch });
+        }
+
+        let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+        remote.push(&[&push_refspec], None).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+        })?;
+
+        Ok(SyncResult::Pushed { branch })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use penna_core::ports::JournalSync;
     use tempfile::TempDir;
 
     fn create_test_repo() -> (TempDir, GitEntryRepository) {
         let tmp_dir = TempDir::new().unwrap();
         let repo = GitEntryRepository::new(tmp_dir.path().to_path_buf()).unwrap();
         (tmp_dir, repo)
+    }
+
+    fn add_origin_remote(repo: &GitEntryRepository, remote_path: &std::path::Path) {
+        let repo_lock = repo.repo.lock().unwrap();
+        repo_lock
+            .remote("origin", remote_path.to_str().unwrap())
+            .unwrap();
     }
 
     #[test]
@@ -505,5 +611,91 @@ mod tests {
         assert_eq!(parsed.id.0, "legacy-id");
         assert_eq!(parsed.title, "Legacy Title");
         assert_eq!(parsed.body, "Legacy body");
+    }
+
+    #[test]
+    fn test_sync_returns_no_remote_when_origin_missing() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        let result = repo.sync().unwrap();
+
+        assert_eq!(result, SyncResult::NoRemote);
+    }
+
+    #[test]
+    fn test_sync_pushes_to_local_bare_remote() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_dir, repo) = create_test_repo();
+        add_origin_remote(&repo, remote_dir.path());
+
+        repo.save(&Entry {
+            id: EntryId("202608091500".to_string()),
+            title: "Push Me".to_string(),
+            body: "Body".to_string(),
+            tags: vec![],
+            created_at: "2026-08-09T15:00:00+00:00".to_string(),
+            updated_at: "2026-08-09T15:00:00+00:00".to_string(),
+        })
+        .unwrap();
+
+        let result = repo.sync().unwrap();
+
+        let branch = match result {
+            SyncResult::Pushed { branch } => branch,
+            other => panic!("expected pushed sync result, got {:?}", other),
+        };
+
+        let remote_repo = Repository::open_bare(remote_dir.path()).unwrap();
+        let remote_ref = format!("refs/heads/{}", branch);
+        assert!(remote_repo.find_reference(&remote_ref).is_ok());
+    }
+
+    #[test]
+    fn test_sync_fast_forwards_local_clone_from_remote() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_dir_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608091510".to_string()),
+                title: "Base".to_string(),
+                body: "Base body".to_string(),
+                tags: vec![],
+                created_at: "2026-08-09T15:10:00+00:00".to_string(),
+                updated_at: "2026-08-09T15:10:00+00:00".to_string(),
+            })
+            .unwrap();
+        repo_a.sync().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned_repo = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned_repo);
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608091511".to_string()),
+                title: "Second".to_string(),
+                body: "Second body".to_string(),
+                tags: vec![],
+                created_at: "2026-08-09T15:11:00+00:00".to_string(),
+                updated_at: "2026-08-09T15:11:00+00:00".to_string(),
+            })
+            .unwrap();
+        repo_a.sync().unwrap();
+
+        let result = repo_b.sync().unwrap();
+        match result {
+            SyncResult::Pulled { .. } => {}
+            other => panic!("expected pulled sync result, got {:?}", other),
+        }
+
+        let pulled = repo_b.get("202608091511").unwrap();
+        assert!(pulled.is_some());
+        assert_eq!(pulled.unwrap().title, "Second");
     }
 }

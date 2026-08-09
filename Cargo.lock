@@ -476,6 +476,7 @@ name = "penna-engine"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "git2",
  "penna-adapters-git",
  "penna-core",
  "serde",

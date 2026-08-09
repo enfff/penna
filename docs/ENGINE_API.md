@@ -195,6 +195,69 @@ Output:
 { "ok": true }
 ```
 
+### sync_journal
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output (up to date):
+
+```json
+{
+  "status": "up_to_date",
+  "branch": "master",
+  "ahead": null,
+  "behind": null
+}
+```
+
+Output (pushed):
+
+```json
+{
+  "status": "pushed",
+  "branch": "master",
+  "ahead": null,
+  "behind": null
+}
+```
+
+Output (pulled):
+
+```json
+{
+  "status": "pulled",
+  "branch": "master",
+  "ahead": null,
+  "behind": null
+}
+```
+
+Output (no remote):
+
+```json
+{
+  "status": "no_remote",
+  "branch": null,
+  "ahead": null,
+  "behind": null
+}
+```
+
+Output (diverged):
+
+```json
+{
+  "status": "diverged",
+  "branch": "master",
+  "ahead": 2,
+  "behind": 1
+}
+```
+
 ### sidecar_integrity_status
 
 Input:

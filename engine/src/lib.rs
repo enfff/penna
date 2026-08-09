@@ -4,9 +4,10 @@ use penna_core::application::{
     CreateEntryError, CreateEntryInput, CreateEntryUseCase, DeleteEntryUseCase, GetEntryUseCase,
     ListEntriesUseCase, SidecarIntegrityStatus, SidecarSource, UpdateEntryError,
     UpdateEntryInput, UpdateEntryUseCase, ValidateSidecarIntegrityUseCase,
+    SyncJournalUseCase,
 };
 use penna_core::domain::{Entry, Sidecar};
-use penna_core::ports::{EntryRepository, RepositoryError};
+use penna_core::ports::{EntryRepository, RepositoryError, SyncResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -117,6 +118,61 @@ pub struct SidecarIntegrityReport {
     pub expected_entry_id: Option<String>,
     pub actual_entry_id: Option<String>,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReport {
+    pub status: String,
+    pub branch: Option<String>,
+    pub ahead: Option<usize>,
+    pub behind: Option<usize>,
+}
+
+impl From<SyncResult> for SyncReport {
+    fn from(value: SyncResult) -> Self {
+        match value {
+            SyncResult::UpToDate { branch } => Self {
+                status: "up_to_date".to_string(),
+                branch: Some(branch),
+                ahead: None,
+                behind: None,
+            },
+            SyncResult::NoRemote => Self {
+                status: "no_remote".to_string(),
+                branch: None,
+                ahead: None,
+                behind: None,
+            },
+            SyncResult::NoBranch => Self {
+                status: "no_branch".to_string(),
+                branch: None,
+                ahead: None,
+                behind: None,
+            },
+            SyncResult::Pulled { branch } => Self {
+                status: "pulled".to_string(),
+                branch: Some(branch),
+                ahead: None,
+                behind: None,
+            },
+            SyncResult::Pushed { branch } => Self {
+                status: "pushed".to_string(),
+                branch: Some(branch),
+                ahead: None,
+                behind: None,
+            },
+            SyncResult::Diverged {
+                branch,
+                ahead,
+                behind,
+            } => Self {
+                status: "diverged".to_string(),
+                branch: Some(branch),
+                ahead: Some(ahead),
+                behind: Some(behind),
+            },
+        }
+    }
 }
 
 impl From<SidecarIntegrityStatus> for SidecarIntegrityReport {
@@ -304,6 +360,13 @@ impl PennaEngine {
         let state = self.session(session_id)?;
         let use_case = DeleteEntryUseCase::new(state.repo.clone());
         use_case.execute(id).map_err(EngineError::Repo)
+    }
+
+    pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = SyncJournalUseCase::new(state.repo.clone());
+        let result = use_case.execute().map_err(EngineError::Repo)?;
+        Ok(result.into())
     }
 
     pub fn sidecar_integrity_status(
