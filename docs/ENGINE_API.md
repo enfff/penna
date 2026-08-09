@@ -195,6 +195,61 @@ Output:
 { "ok": true }
 ```
 
+### sidecar_integrity_status
+
+Input:
+
+```json
+{
+  "entry_id": "202608091131",
+  "sidecar_json": "{\"schema_version\":1,\"entry_id\":\"202608091131\",\"generated_at\":\"2026-08-09T11:35:05+00:00\",\"blocks\":[],\"attachments\":null,\"revisions\":null}"
+}
+```
+
+Output (ok):
+
+```json
+{
+  "status": "ok",
+  "expected_entry_id": null,
+  "actual_entry_id": null,
+  "reason": null
+}
+```
+
+Output (mismatch):
+
+```json
+{
+  "status": "mismatch",
+  "expected_entry_id": "202608091131",
+  "actual_entry_id": "wrong-id",
+  "reason": null
+}
+```
+
+Output (missing):
+
+```json
+{
+  "status": "missing",
+  "expected_entry_id": null,
+  "actual_entry_id": null,
+  "reason": null
+}
+```
+
+Output (malformed):
+
+```json
+{
+  "status": "malformed",
+  "expected_entry_id": null,
+  "actual_entry_id": null,
+  "reason": "expected value at line 1 column 1"
+}
+```
+
 ## Error Contract
 
 Engine returns typed errors internally. Bridge should map to consistent frontend shape:

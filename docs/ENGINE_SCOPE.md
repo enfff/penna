@@ -52,6 +52,6 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 ## Near-Term Engine Milestones
 
 1. Entry lifecycle v1: create/get/list/update/delete with strict invariants and tests.
-2. Markdown + frontmatter round-trip with unknown-field preservation.
-3. Sidecar integrity checks (`entry_id` matching, graceful fallback behavior).
+2. Plain Markdown storage contract that matches the real editor/frontend behavior.
+3. Sync API for pull/push or unified journal sync.
 4. Engine API surface that frontends can consume without touching adapters directly.

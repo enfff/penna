@@ -1,149 +1,118 @@
 # DATA_MODEL.md
 
-Status: living specification.
-Scope: entry storage, frontmatter, sidecar, and conversion contracts.
+Status: v1 storage contract.
+Scope: entry storage, file naming, and current persistence rules.
 
-This document defines Penna's durable data contracts.
-It complements [ARCHITECTURE.md](./ARCHITECTURE.md).
+This document defines what Penna persists today.
+It favors the real v1 product loop over a richer future model.
 
 ## Core Data Principle
 
-Markdown is the durable source of truth.
-The sidecar is supplementary metadata for fidelity that Markdown alone cannot preserve.
-Deleting sidecars must never destroy textual content.
+Plain Markdown is the durable source of truth.
+For v1, each entry is a single Markdown file that remains human-readable without Penna.
 
 ## Journal Layout
 
-A journal is a git repository with human-readable Markdown entries.
+A journal is a git repository with Markdown entries at the repo root.
 
 ```text
 journal-root/
 ├── .git/
-├── .penna/
-│   ├── config.yaml
-│   ├── index.sqlite
-│   ├── sidecars/
-│   │   └── YYYY-MM-DD-slug.json
-│   └── attachments/
-│       └── <entry-slug>/...
-└── YYYY-MM-DD-slug.md
+├── YYYYMMDDHHmm.md
+├── YYYYMMDDHHmm.md
+└── ...
 ```
 
 Rules:
 
-1. Entry filename format: `YYYY-MM-DD-slug.md`.
-2. Slug is derived from title for readability only.
-3. Canonical identity is frontmatter `id`, not filename.
-4. `.penna/index.sqlite` and sidecars are rebuildable caches.
+1. Entry filename format: `YYYYMMDDHHmm.md`.
+2. Entry id is the filename without `.md`.
+3. Files are plain Markdown only.
+4. No required frontmatter in v1.
+5. No required sidecar files in v1.
 
 ## Entry File Anatomy
 
-Each entry file has YAML frontmatter followed by Markdown body.
+Each entry file is plain Markdown.
+The first Markdown heading is treated as the title when present.
 
 ```markdown
----
-id: 8f14e45f-ceea-467e-9c9a-3f6b30930f39
-title: First Day Back
-created_at: 2024-01-15T08:32:00-05:00
-updated_at: 2024-01-15T21:14:03-05:00
-tags:
-  - work
-  - reflection
-mood: content
-penna_sidecar: sidecars/2024-01-15-first-day-back.json
----
-
 # First Day Back
 
 Entry body in standard Markdown.
 ```
 
-## Frontmatter Schema
+Fallback behavior:
 
-| Field | Type | Required | Rule |
-|---|---|---|---|
-| `id` | UUID string | Yes | Immutable per entry |
-| `title` | string | Yes | Human title and slug source |
-| `created_at` | RFC 3339 datetime | Yes | Set at creation |
-| `updated_at` | RFC 3339 datetime | Yes | Updated on mutation |
-| `tags` | list of strings | No | Normalize to lowercase kebab-case in domain |
-| `mood` | string | No | Optional mood marker |
-| `penna_sidecar` | relative path string | No | Path under `.penna/sidecars/` |
-| unknown keys | any YAML value | No | Preserve verbatim on read and write |
+1. If the first non-empty line starts with `# `, the title is the heading text.
+2. Otherwise, the entry title falls back to `Untitled`.
+3. The file body remains standard Markdown text.
 
-Preservation contract:
+## Current Persisted Model
 
-1. Unknown frontmatter fields must round-trip.
-2. Unknown fields must not be dropped or reordered intentionally.
-3. Importers must tolerate extra keys from other tools.
+The engine `Entry` model currently includes:
 
-## Sidecar Schema
+- `id`
+- `title`
+- `body`
+- `tags`
+- `created_at`
+- `updated_at`
 
-Sidecar stores non-Markdown fidelity only.
-It must not duplicate plain textual body content.
+Persistence rules for v1:
 
-```json
-{
-  "schema_version": 1,
-  "entry_id": "8f14e45f-ceea-467e-9c9a-3f6b30930f39",
-  "generated_at": "2024-01-15T21:14:03-05:00",
-  "blocks": [],
-  "attachments": [],
-  "revisions": []
-}
-```
+1. `id` persists via filename.
+2. `title` persists via the first heading in the Markdown body.
+3. `body` persists as Markdown text.
+4. `tags` are not durably stored in the file format yet.
+5. `created_at` and `updated_at` are not durably stored in the file format yet.
 
-| Field | Type | Rule |
-|---|---|---|
-| `schema_version` | integer | Required for migrations |
-| `entry_id` | UUID string | Must equal frontmatter `id` |
-| `generated_at` | RFC 3339 datetime | Last sidecar generation timestamp |
-| `blocks` | array | Rich block annotations/widgets |
-| `attachments` | array | Metadata for binaries under `.penna/attachments` |
-| `revisions` | array | Optional app-level revision metadata |
+This is intentional for v1 simplicity.
 
-## Domain Model Expectations
+## Deferred Metadata Model
 
-Domain entities are storage-agnostic.
-Adapters are responsible for Markdown/YAML/JSON mapping.
+The richer metadata model is deferred.
+This includes:
 
-Expected domain concepts:
+1. YAML frontmatter persistence.
+2. Unknown frontmatter preservation.
+3. `penna_sidecar` file references.
+4. Sidecar file lifecycle.
+5. Rich block fidelity beyond plain Markdown.
 
-- `Entry`: id, metadata, body document, attachments, preserved unknown frontmatter.
-- `Journal`: collection/root metadata and entry references.
-- `Tag`: normalized tag value.
-- `Attachment`: attachment identity and relative path.
-- `MergeConflict`: explicit unresolved merge state.
+These may return in a future version once the editor and sync flows require them.
 
 ## Import/Export Contracts
 
-Importer and exporter behavior must be best-effort and non-destructive.
+Importer and exporter behavior must remain best-effort and non-destructive.
 
-1. Import must not hard-fail on unsupported syntax.
+1. Import must not hard-fail on unsupported Markdown syntax.
 2. Unsupported constructs should fall back to plain text or raw block representation.
-3. Export must produce valid Markdown even when rich nodes cannot be fully represented.
-4. Exporter strips sidecar pointer by default when producing portable output.
-5. Frontmatter must be preserved, including unknown fields.
+3. Export must produce valid plain Markdown.
+4. Frontend-visible storage should stay human-readable.
 
 ## Invariants
 
-1. Every persisted entry has a stable `id`.
-2. `updated_at` is greater than or equal to `created_at`.
-3. Sidecar `entry_id` must match entry frontmatter `id`.
-4. Removing sidecar cannot remove body text.
-5. Filename changes must not change identity.
+1. Every persisted entry has a stable id derived from filename.
+2. Removing Penna-specific logic must not destroy note text.
+3. Entry files remain readable in any plain Markdown editor.
+4. Create, update, and delete must affect both git history and working-tree files.
 
 ## Testing Requirements
 
 At minimum, maintain tests for:
 
-1. Markdown plus frontmatter import round-trip.
-2. Unknown frontmatter preservation.
-3. Sidecar mismatch detection (`entry_id` integrity).
-4. Malformed Markdown graceful degradation.
-5. Export behavior that omits sidecar metadata by default.
+1. Create entry writes a real Markdown file.
+2. Get entry reads title/body back from plain Markdown.
+3. Update entry rewrites the Markdown file.
+4. Delete entry removes the file.
+5. Legacy plain Markdown parsing remains stable.
+
+## Future Work
+
+If richer metadata becomes necessary, introduce it explicitly as v2 rather than leaving v1 half-migrated.
 
 ## Related Documents
 
 - [Architecture](./ARCHITECTURE.md)
-- [ADRs](./ADR/)
+- [ENGINE_SCOPE](./ENGINE_SCOPE.md)

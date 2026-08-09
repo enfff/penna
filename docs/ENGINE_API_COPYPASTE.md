@@ -14,6 +14,7 @@ pub fn create_entry(&self, session_id: &str, request: CreateEntryRequest) -> Res
 pub fn create_entry_api(&self, request: CreateEntryApiRequest) -> Result<EntryDto, EngineError>;
 pub fn update_entry(&self, session_id: &str, request: UpdateEntryRequest) -> Result<Entry, EngineError>;
 pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError>;
+pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
 ```
 
 ## DTOs
@@ -73,6 +74,14 @@ pub struct EngineErrorDto {
   pub code: String,
   pub message: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SidecarIntegrityReport {
+  pub status: String,
+  pub expected_entry_id: Option<String>,
+  pub actual_entry_id: Option<String>,
+  pub reason: Option<String>,
+}
 ```
 
 ## JSON Payloads
@@ -113,6 +122,10 @@ pub struct EngineErrorDto {
   "delete_entry": {
     "session_id": "session-1754733553000000000",
     "id": "202608091130"
+  },
+  "sidecar_integrity_status": {
+    "entry_id": "202608091130",
+    "sidecar_json": "{\"schema_version\":1,\"entry_id\":\"202608091130\",\"generated_at\":\"2026-08-09T11:30:00+00:00\",\"blocks\":[],\"attachments\":null,\"revisions\":null}"
   }
 }
 ```

@@ -130,14 +130,7 @@ impl GitEntryRepository {
     }
 
     fn parse_entry_content(id: &str, content: &str) -> Result<Entry, RepositoryError> {
-        Self::parse_entry_with_timestamps(id, content, None)
-    }
-
-    fn parse_entry_with_timestamps(
-        id: &str, 
-        content: &str, 
-        timestamps: Option<(String, String)>
-    ) -> Result<Entry, RepositoryError> {
+        let timestamps = None;
         let lines: Vec<&str> = content.lines().collect();
         
         let (title, body_start) = if lines.first().map(|l| l.starts_with("# ")).unwrap_or(false) {
@@ -146,7 +139,11 @@ impl GitEntryRepository {
             ("Untitled".to_string(), 0)
         };
         
-        let body = lines[body_start..].join("\n");
+        let mut body_lines = &lines[body_start..];
+        if !body_lines.is_empty() && body_lines[0].is_empty() {
+            body_lines = &body_lines[1..];
+        }
+        let body = body_lines.join("\n");
         
         let (created_at, updated_at) = match timestamps {
             Some((c, u)) => (c, u),
@@ -199,6 +196,15 @@ impl EntryRepository for GitEntryRepository {
         let entry_path = self.entry_path(&entry.id.0);
         let content = Self::format_entry_content(entry);
         let sig = self.create_signature()?;
+        let absolute_entry_path = self.root.join(&entry_path);
+
+        std::fs::write(&absolute_entry_path, content.as_bytes()).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to write entry file {}: {}",
+                absolute_entry_path.display(),
+                e
+            ))
+        })?;
         
         let repo = self.repo.lock().unwrap();
         
@@ -269,6 +275,17 @@ impl EntryRepository for GitEntryRepository {
     fn delete(&self, id: &str) -> Result<(), RepositoryError> {
         let repo = self.repo.lock().unwrap();
         let entry_path = self.entry_path(id);
+        let absolute_entry_path = self.root.join(&entry_path);
+
+        if absolute_entry_path.exists() {
+            std::fs::remove_file(&absolute_entry_path).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to remove entry file {}: {}",
+                    absolute_entry_path.display(),
+                    e
+                ))
+            })?;
+        }
 
         let head = repo.head();
         let parent_commit_oid = match head {
@@ -361,11 +378,7 @@ impl EntryRepository for GitEntryRepository {
             }
         }
 
-        entries.sort_by(|a, b| {
-            let a_ts = a.updated_at.parse::<u64>().unwrap_or(0);
-            let b_ts = b.updated_at.parse::<u64>().unwrap_or(0);
-            b_ts.cmp(&a_ts)
-        });
+        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
         Ok(entries)
     }
@@ -384,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_create_and_get_entry() {
-        let (_tmp_dir, repo) = create_test_repo();
+        let (tmp_dir, repo) = create_test_repo();
         
         let entry = Entry {
             id: EntryId("test-1".to_string()),
@@ -396,10 +409,39 @@ mod tests {
         };
 
         repo.save(&entry).unwrap();
+
+        let file_path = tmp_dir.path().join("test-1.md");
+        assert!(file_path.exists());
+        let file_content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(file_content.starts_with("# Test Entry\n\n"));
+        assert!(file_content.contains("Test body content"));
         
         let retrieved = repo.get("test-1").unwrap();
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().title, "Test Entry");
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.title, "Test Entry");
+        assert_eq!(retrieved.body, "Test body content");
+    }
+
+    #[test]
+    fn test_delete_removes_working_tree_file() {
+        let (tmp_dir, repo) = create_test_repo();
+
+        let entry = Entry {
+            id: EntryId("test-delete".to_string()),
+            title: "Delete Me".to_string(),
+            body: "Body".to_string(),
+            tags: vec![],
+            created_at: "123".to_string(),
+            updated_at: "123".to_string(),
+        };
+
+        repo.save(&entry).unwrap();
+        let file_path = tmp_dir.path().join("test-delete.md");
+        assert!(file_path.exists());
+
+        repo.delete("test-delete").unwrap();
+        assert!(!file_path.exists());
     }
 
     #[test]
@@ -433,5 +475,35 @@ mod tests {
         let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
         assert!(titles.contains(&"Entry 1"));
         assert!(titles.contains(&"Entry 2"));
+    }
+
+    #[test]
+    fn test_plain_markdown_storage_does_not_persist_tags() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        let entry = Entry {
+            id: EntryId("test-tags".to_string()),
+            title: "Tagged".to_string(),
+            body: "Tagged body".to_string(),
+            tags: vec!["work".to_string(), "daily-note".to_string()],
+            created_at: "2026-08-09T10:00:00+00:00".to_string(),
+            updated_at: "2026-08-09T11:00:00+00:00".to_string(),
+        };
+
+        repo.save(&entry).unwrap();
+
+        let loaded = repo.get("test-tags").unwrap().unwrap();
+        assert!(loaded.tags.is_empty());
+    }
+
+    #[test]
+    fn test_plain_markdown_reads() {
+        let content = "# Legacy Title\n\nLegacy body";
+
+        let parsed = GitEntryRepository::parse_entry_content("legacy-id", content).unwrap();
+
+        assert_eq!(parsed.id.0, "legacy-id");
+        assert_eq!(parsed.title, "Legacy Title");
+        assert_eq!(parsed.body, "Legacy body");
     }
 }

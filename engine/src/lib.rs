@@ -2,9 +2,10 @@ use chrono::{Duration, Local};
 use penna_adapters_git::GitEntryRepository;
 use penna_core::application::{
     CreateEntryError, CreateEntryInput, CreateEntryUseCase, DeleteEntryUseCase, GetEntryUseCase,
-    ListEntriesUseCase, UpdateEntryError, UpdateEntryInput, UpdateEntryUseCase,
+    ListEntriesUseCase, SidecarIntegrityStatus, SidecarSource, UpdateEntryError,
+    UpdateEntryInput, UpdateEntryUseCase, ValidateSidecarIntegrityUseCase,
 };
-use penna_core::domain::Entry;
+use penna_core::domain::{Entry, Sidecar};
 use penna_core::ports::{EntryRepository, RepositoryError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -108,6 +109,48 @@ pub struct EntryDto {
     pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarIntegrityReport {
+    pub status: String,
+    pub expected_entry_id: Option<String>,
+    pub actual_entry_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+impl From<SidecarIntegrityStatus> for SidecarIntegrityReport {
+    fn from(value: SidecarIntegrityStatus) -> Self {
+        match value {
+            SidecarIntegrityStatus::Ok => Self {
+                status: "ok".to_string(),
+                expected_entry_id: None,
+                actual_entry_id: None,
+                reason: None,
+            },
+            SidecarIntegrityStatus::Missing => Self {
+                status: "missing".to_string(),
+                expected_entry_id: None,
+                actual_entry_id: None,
+                reason: None,
+            },
+            SidecarIntegrityStatus::Mismatch {
+                expected_entry_id,
+                actual_entry_id,
+            } => Self {
+                status: "mismatch".to_string(),
+                expected_entry_id: Some(expected_entry_id),
+                actual_entry_id: Some(actual_entry_id),
+                reason: None,
+            },
+            SidecarIntegrityStatus::Malformed { reason } => Self {
+                status: "malformed".to_string(),
+                expected_entry_id: None,
+                actual_entry_id: None,
+                reason: Some(reason),
+            },
+        }
+    }
 }
 
 impl From<Entry> for EntryDto {
@@ -261,6 +304,23 @@ impl PennaEngine {
         let state = self.session(session_id)?;
         let use_case = DeleteEntryUseCase::new(state.repo.clone());
         use_case.execute(id).map_err(EngineError::Repo)
+    }
+
+    pub fn sidecar_integrity_status(
+        &self,
+        entry_id: &str,
+        sidecar_json: Option<&str>,
+    ) -> SidecarIntegrityReport {
+        let source = match sidecar_json {
+            None => SidecarSource::Missing,
+            Some(json) => match serde_json::from_str::<Sidecar>(json) {
+                Ok(sidecar) => SidecarSource::Present(sidecar),
+                Err(err) => SidecarSource::Malformed(err.to_string()),
+            },
+        };
+
+        let use_case = ValidateSidecarIntegrityUseCase::new();
+        use_case.execute(entry_id, source).into()
     }
 
     fn session(&self, session_id: &str) -> Result<SessionState, EngineError> {
