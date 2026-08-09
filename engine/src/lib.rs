@@ -23,6 +23,45 @@ pub enum EngineError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineErrorDto {
+    pub code: String,
+    pub message: String,
+}
+
+impl EngineError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            EngineError::Io(_) => "IO",
+            EngineError::NotConnected(_) => "NOT_CONNECTED",
+            EngineError::Repo(_) => "REPO",
+            EngineError::Create(CreateEntryError::Domain(_)) => "VALIDATION",
+            EngineError::Create(CreateEntryError::Repository(_)) => "REPO",
+            EngineError::Update(UpdateEntryError::Domain(_)) => "VALIDATION",
+            EngineError::Update(UpdateEntryError::Repository(_)) => "REPO",
+            EngineError::IdCollision(_) => "CONFLICT",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            EngineError::Io(msg) => msg.clone(),
+            EngineError::NotConnected(msg) => msg.clone(),
+            EngineError::Repo(err) => format!("{:?}", err),
+            EngineError::Create(err) => format!("{:?}", err),
+            EngineError::Update(err) => format!("{:?}", err),
+            EngineError::IdCollision(msg) => msg.clone(),
+        }
+    }
+
+    pub fn to_dto(&self) -> EngineErrorDto {
+        EngineErrorDto {
+            code: self.code().to_string(),
+            message: self.message(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalSession {
     pub session_id: String,
     pub repo_path: String,

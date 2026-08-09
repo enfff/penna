@@ -67,6 +67,12 @@ pub struct EntryDto {
   pub created_at: String,
   pub updated_at: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EngineErrorDto {
+  pub code: String,
+  pub message: String,
+}
 ```
 
 ## JSON Payloads
