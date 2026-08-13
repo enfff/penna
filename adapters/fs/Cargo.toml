@@ -2,6 +2,8 @@
 name = "penna-adapters-fs"
 version = "0.1.0"
 edition = "2024"
+description = "Filesystem adapter for Penna journaling engine"
+license = "UNLICENSED"
 
 [dependencies]
-penna-core = { path = "../../core" }
+penna-core = { version = "0.1.0", path = "../../core" }

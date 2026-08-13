@@ -2,13 +2,15 @@
 name = "penna-engine"
 version = "0.1.0"
 edition = "2024"
+description = "Penna engine API for git-native journaling"
+license = "UNLICENSED"
 
 [dependencies]
 chrono = { version = "0.4", default-features = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-penna-core = { path = "../core" }
-penna-adapters-git = { path = "../adapters/git" }
+penna-core = { version = "0.1.0", path = "../core" }
+penna-adapters-git = { version = "0.1.0", path = "../adapters/git" }
 
 [dev-dependencies]
 git2 = "0.19"
