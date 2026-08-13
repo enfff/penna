@@ -15,7 +15,17 @@ pub fn create_entry_api(&self, request: CreateEntryApiRequest) -> Result<EntryDt
 pub fn update_entry(&self, session_id: &str, request: UpdateEntryRequest) -> Result<Entry, EngineError>;
 pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError>;
 pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+pub fn list_tags(&self, session_id: &str) -> Result<Vec<String>, EngineError>;
+pub fn add_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
+pub fn remove_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
+pub fn update_tag(&self, session_id: &str, old_tag: &str, new_tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
+
+// Proposed
+pub fn clone_journal(&self, request: CloneJournalRequest) -> Result<JournalSession, EngineError>;
+pub fn resolve_journal_path(&self, session_id: &str) -> Result<ResolveJournalPathResponse, EngineError>;
+pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+pub fn push_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
 ```
 
 ## Planned Tags Sidecar Contract (v1)
@@ -42,6 +52,17 @@ Behavior target:
 - `get_entry`/`list_entries`: hydrate `tags` from `.penna/<id>.json`.
 - missing sidecar: return empty tags, no hard failure.
 - malformed sidecar: return empty tags + integrity warning path via `sidecar_integrity_status`.
+
+Global tag catalog storage (implemented):
+
+- Path: `.penna/tags.json`
+- Shape:
+
+```json
+{
+  "tags": ["work", "idea"]
+}
+```
 
 ## DTOs
 
@@ -116,6 +137,18 @@ pub struct SyncReport {
   pub ahead: Option<usize>,
   pub behind: Option<usize>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloneJournalRequest {
+  pub remote_url: String,
+  pub local_parent_dir: String,
+  pub directory_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResolveJournalPathResponse {
+  pub repo_path: String,
+}
 ```
 
 ## JSON Payloads
@@ -157,7 +190,37 @@ pub struct SyncReport {
     "session_id": "session-1754733553000000000",
     "id": "202608091130"
   },
+  "list_tags": {
+    "session_id": "session-1754733553000000000"
+  },
+  "add_tag": {
+    "session_id": "session-1754733553000000000",
+    "tag": "work"
+  },
+  "remove_tag": {
+    "session_id": "session-1754733553000000000",
+    "tag": "work"
+  },
+  "update_tag": {
+    "session_id": "session-1754733553000000000",
+    "old_tag": "work",
+    "new_tag": "deep-work"
+  },
   "sync_journal": {
+    "session_id": "session-1754733553000000000"
+  },
+  "clone_journal": {
+    "remote_url": "https://example.com/user/journal.git",
+    "local_parent_dir": "/home/user/Documents",
+    "directory_name": "my-journal"
+  },
+  "resolve_journal_path": {
+    "session_id": "session-1754733553000000000"
+  },
+  "pull_journal": {
+    "session_id": "session-1754733553000000000"
+  },
+  "push_journal": {
     "session_id": "session-1754733553000000000"
   },
   "sidecar_integrity_status": {

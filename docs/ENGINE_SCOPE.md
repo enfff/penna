@@ -41,6 +41,9 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 7. `update_entry(session_id, request)` -> update existing entry while preserving `created_at`.
 8. `delete_entry(session_id, id)` -> delete entry.
 9. `sync_journal(session_id)` -> fetch/push journal state and report sync status.
+10. Planned: `clone_journal(request)` -> clone remote repo and open session.
+11. Planned: `resolve_journal_path(session_id)` -> return canonical local repository path.
+12. Planned: `pull_journal(session_id)` and `push_journal(session_id)` -> explicit directional sync controls.
 
 ## Source Of Truth Hierarchy
 
@@ -56,3 +59,4 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 2. Plain Markdown body storage plus `.penna/<id>.json` tags sidecar contract.
 3. Sync API for pull/push or unified journal sync with structured status reporting.
 4. Engine API surface that frontends can consume without touching adapters directly.
+5. Remote onboarding API (`clone_journal`) with explicit path and sync controls.

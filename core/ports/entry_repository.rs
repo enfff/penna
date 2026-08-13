@@ -26,6 +26,23 @@ pub enum SyncResult {
 
 pub trait JournalSync: Send + Sync {
     fn sync(&self) -> Result<SyncResult, RepositoryError>;
+    fn pull(&self) -> Result<SyncResult, RepositoryError>;
+    fn push(&self) -> Result<SyncResult, RepositoryError>;
+}
+
+pub trait JournalClone: Send + Sync {
+    fn clone_journal(&self, remote_url: &str, local_path: &PathBuf) -> Result<(), RepositoryError>;
+}
+
+pub trait JournalPath: Send + Sync {
+    fn resolve_path(&self) -> Result<PathBuf, RepositoryError>;
+}
+
+pub trait TagCatalog: Send + Sync {
+    fn list_tags(&self) -> Result<Vec<String>, RepositoryError>;
+    fn add_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError>;
+    fn remove_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError>;
+    fn update_tag(&self, old_tag: &str, new_tag: &str) -> Result<Vec<String>, RepositoryError>;
 }
 
 use std::fmt;

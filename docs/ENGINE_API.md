@@ -28,6 +28,92 @@ Flow:
 3. Engine/adapters persist tags in `.penna/<entry_id>.json`.
 4. Missing sidecar is non-fatal; tags default to empty list.
 
+## Planned Repository Lifecycle APIs (Proposed)
+
+These methods are proposed for remote-first onboarding and explicit sync controls.
+Current implementation already supports `connect_journal` and `sync_journal`.
+
+### clone_journal
+
+Purpose: clone remote git journal to local filesystem, then open engine session.
+
+Input:
+
+```json
+{
+  "remote_url": "https://example.com/user/journal.git",
+  "local_parent_dir": "/home/user/Documents",
+  "directory_name": "my-journal"
+}
+```
+
+Output:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "repo_path": "/home/user/Documents/my-journal"
+}
+```
+
+### resolve_journal_path
+
+Purpose: return canonical absolute path for currently connected session.
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{ "repo_path": "/home/user/Documents/my-journal" }
+```
+
+### pull_journal
+
+Purpose: explicit pull-only operation for frontends that want manual pull button.
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{
+  "status": "up_to_date|pulled|no_remote|no_branch|diverged",
+  "branch": "master",
+  "ahead": null,
+  "behind": null
+}
+```
+
+### push_journal
+
+Purpose: explicit push-only operation for frontends that want manual push button.
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{
+  "status": "up_to_date|pushed|no_remote|no_branch|diverged",
+  "branch": "master",
+  "ahead": null,
+  "behind": null
+}
+```
+
 ### connect_journal
 
 Input:

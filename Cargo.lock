@@ -450,6 +450,8 @@ version = "0.1.0"
 dependencies = [
  "git2",
  "penna-core",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

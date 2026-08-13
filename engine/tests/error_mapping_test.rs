@@ -1,5 +1,7 @@
 use penna_engine::{EngineError, EngineErrorDto};
-use penna_core::application::{CreateEntryError, UpdateEntryError};
+use penna_core::application::{
+    AddTagError, CreateEntryError, RemoveTagError, UpdateEntryError, UpdateTagError,
+};
 use penna_core::domain::DomainError;
 use penna_core::ports::RepositoryError;
 
@@ -7,9 +9,15 @@ use penna_core::ports::RepositoryError;
 fn maps_validation_errors_to_validation_code() {
     let create_error = EngineError::Create(CreateEntryError::Domain(DomainError::EmptyTitle));
     let update_error = EngineError::Update(UpdateEntryError::Domain(DomainError::EmptyTitle));
+    let add_tag_error = EngineError::AddTag(AddTagError::InvalidTag);
+    let remove_tag_error = EngineError::RemoveTag(RemoveTagError::InvalidTag);
+    let update_tag_error = EngineError::UpdateTag(UpdateTagError::InvalidTag);
 
     assert_eq!(create_error.code(), "VALIDATION");
     assert_eq!(update_error.code(), "VALIDATION");
+    assert_eq!(add_tag_error.code(), "VALIDATION");
+    assert_eq!(remove_tag_error.code(), "VALIDATION");
+    assert_eq!(update_tag_error.code(), "VALIDATION");
 }
 
 #[test]

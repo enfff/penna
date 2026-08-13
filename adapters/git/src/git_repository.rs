@@ -1,9 +1,28 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
 use penna_core::domain::{Entry, EntryId};
-use penna_core::ports::{EntryRepository, JournalSync, RepositoryError, SyncResult};
+use penna_core::ports::{
+    EntryRepository, JournalClone, JournalPath, JournalSync, RepositoryError, SyncResult,
+    TagCatalog,
+};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy)]
+enum SyncMode {
+    Smart,
+    PullOnly,
+    PushOnly,
+}
+
+pub struct GitJournalCloner;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TagsCatalogFile {
+    tags: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryStatus {
@@ -169,6 +188,291 @@ impl GitEntryRepository {
 
     fn format_entry_content(entry: &Entry) -> String {
         format!("# {}\n\n{}", entry.title, entry.body)
+    }
+
+    fn tags_file_relative_path() -> &'static Path {
+        Path::new(".penna/tags.json")
+    }
+
+    fn tags_file_absolute_path(&self) -> PathBuf {
+        self.root.join(Self::tags_file_relative_path())
+    }
+
+    fn normalize_tags(mut tags: Vec<String>) -> Vec<String> {
+        for tag in &mut tags {
+            *tag = tag.trim().to_string();
+        }
+        tags.retain(|t| !t.is_empty());
+        tags.sort();
+        tags.dedup();
+        tags
+    }
+
+    fn read_tags_from_disk(&self) -> Result<Vec<String>, RepositoryError> {
+        let path = self.tags_file_absolute_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let bytes = std::fs::read(&path).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to read tags file {}: {}", path.display(), e))
+        })?;
+
+        let parsed: TagsCatalogFile = serde_json::from_slice(&bytes).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to parse tags file {}: {}", path.display(), e))
+        })?;
+
+        Ok(Self::normalize_tags(parsed.tags))
+    }
+
+    fn write_tags_to_disk_and_commit(&self, tags: Vec<String>, message: &str) -> Result<Vec<String>, RepositoryError> {
+        let normalized = Self::normalize_tags(tags);
+        let file_path = self.tags_file_absolute_path();
+
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to create tags parent directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        let payload = TagsCatalogFile {
+            tags: normalized.clone(),
+        };
+
+        let content = serde_json::to_vec_pretty(&payload).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to encode tags payload: {}", e))
+        })?;
+
+        std::fs::write(&file_path, content).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to write tags file {}: {}", file_path.display(), e))
+        })?;
+
+        let repo = self.repo.lock().unwrap();
+        let mut index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+
+        index
+            .add_path(Self::tags_file_relative_path())
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add tags file to index: {}", e)))?;
+        index
+            .write()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+
+        let tree_oid = index
+            .write_tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+
+        let sig = self.create_signature()?;
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to commit tags change: {}", e)))?;
+
+        Ok(normalized)
+    }
+
+    fn sync_with_mode(&self, mode: SyncMode) -> Result<SyncResult, RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+
+        let mut remote = match repo.find_remote("origin") {
+            Ok(remote) => remote,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(SyncResult::NoRemote),
+            Err(e) => {
+                return Err(RepositoryError::Storage(format!(
+                    "Failed to find origin remote: {}",
+                    e
+                )))
+            }
+        };
+
+        let branch = match repo.head() {
+            Ok(head) if head.is_branch() => head
+                .shorthand()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| RepositoryError::Storage("failed to resolve current branch".to_string()))?,
+            _ => return Ok(SyncResult::NoBranch),
+        };
+
+        let local_oid = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?
+            .id();
+
+        let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
+        remote
+            .fetch(&[&fetch_refspec], None, None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to fetch remote: {}", e)))?;
+
+        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_oid = match repo.find_reference(&remote_ref_name) {
+            Ok(reference) => reference.target().ok_or_else(|| {
+                RepositoryError::Storage("remote tracking reference has no target".to_string())
+            })?,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                if matches!(mode, SyncMode::PullOnly) {
+                    return Ok(SyncResult::UpToDate { branch });
+                }
+
+                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                remote.push(&[&push_refspec], None).map_err(|err| {
+                    RepositoryError::Storage(format!("Failed to push branch to remote: {}", err))
+                })?;
+                return Ok(SyncResult::Pushed { branch });
+            }
+            Err(e) => {
+                return Err(RepositoryError::Storage(format!(
+                    "Failed to read remote tracking branch: {}",
+                    e
+                )))
+            }
+        };
+
+        let (ahead, behind) = repo
+            .graph_ahead_behind(local_oid, remote_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
+
+        if ahead == 0 && behind == 0 {
+            return Ok(SyncResult::UpToDate { branch });
+        }
+
+        if ahead > 0 && behind > 0 {
+            return Ok(SyncResult::Diverged {
+                branch,
+                ahead,
+                behind,
+            });
+        }
+
+        match mode {
+            SyncMode::PullOnly => {
+                if behind == 0 {
+                    return Ok(SyncResult::UpToDate { branch });
+                }
+
+                let local_ref_name = format!("refs/heads/{}", branch);
+                let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
+                    RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
+                })?;
+
+                local_ref.set_target(remote_oid, "penna pull fast-forward").map_err(|e| {
+                    RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
+                })?;
+
+                repo.set_head(&local_ref_name)
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
+
+                repo.checkout_head(Some(CheckoutBuilder::new().force()))
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
+
+                Ok(SyncResult::Pulled { branch })
+            }
+            SyncMode::PushOnly => {
+                if ahead == 0 {
+                    return Ok(SyncResult::Diverged {
+                        branch,
+                        ahead,
+                        behind,
+                    });
+                }
+
+                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                remote.push(&[&push_refspec], None).map_err(|e| {
+                    RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                })?;
+
+                Ok(SyncResult::Pushed { branch })
+            }
+            SyncMode::Smart => {
+                if behind > 0 {
+                    let local_ref_name = format!("refs/heads/{}", branch);
+                    let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
+                        RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
+                    })?;
+
+                    local_ref.set_target(remote_oid, "penna sync fast-forward").map_err(|e| {
+                        RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
+                    })?;
+
+                    repo.set_head(&local_ref_name)
+                        .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
+
+                    repo.checkout_head(Some(CheckoutBuilder::new().force()))
+                        .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
+
+                    return Ok(SyncResult::Pulled { branch });
+                }
+
+                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                remote.push(&[&push_refspec], None).map_err(|e| {
+                    RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                })?;
+
+                Ok(SyncResult::Pushed { branch })
+            }
+        }
+    }
+}
+
+impl JournalClone for GitJournalCloner {
+    fn clone_journal(&self, remote_url: &str, local_path: &PathBuf) -> Result<(), RepositoryError> {
+        Repository::clone(remote_url, local_path).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to clone repository from {} to {}: {}",
+                remote_url,
+                local_path.display(),
+                e
+            ))
+        })?;
+
+        Ok(())
+    }
+}
+
+impl JournalPath for GitEntryRepository {
+    fn resolve_path(&self) -> Result<PathBuf, RepositoryError> {
+        self.root
+            .canonicalize()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to canonicalize repo path: {}", e)))
+    }
+}
+
+impl TagCatalog for GitEntryRepository {
+    fn list_tags(&self) -> Result<Vec<String>, RepositoryError> {
+        self.read_tags_from_disk()
+    }
+
+    fn add_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError> {
+        let mut tags = self.read_tags_from_disk()?;
+        if !tags.iter().any(|t| t == tag) {
+            tags.push(tag.to_string());
+        }
+        self.write_tags_to_disk_and_commit(tags, &format!("Add tag {}", tag))
+    }
+
+    fn remove_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError> {
+        let mut tags = self.read_tags_from_disk()?;
+        tags.retain(|t| t != tag);
+        self.write_tags_to_disk_and_commit(tags, &format!("Remove tag {}", tag))
+    }
+
+    fn update_tag(&self, old_tag: &str, new_tag: &str) -> Result<Vec<String>, RepositoryError> {
+        let mut tags = self.read_tags_from_disk()?;
+        let Some(position) = tags.iter().position(|t| t == old_tag) else {
+            return Err(RepositoryError::NotFound(old_tag.to_string()));
+        };
+
+        tags[position] = new_tag.to_string();
+        self.write_tags_to_disk_and_commit(tags, &format!("Rename tag {} to {}", old_tag, new_tag))
     }
 }
 
@@ -386,106 +690,22 @@ impl EntryRepository for GitEntryRepository {
 
 impl JournalSync for GitEntryRepository {
     fn sync(&self) -> Result<SyncResult, RepositoryError> {
-        let repo = self.repo.lock().unwrap();
+        self.sync_with_mode(SyncMode::Smart)
+    }
 
-        let mut remote = match repo.find_remote("origin") {
-            Ok(remote) => remote,
-            Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(SyncResult::NoRemote),
-            Err(e) => {
-                return Err(RepositoryError::Storage(format!(
-                    "Failed to find origin remote: {}",
-                    e
-                )))
-            }
-        };
+    fn pull(&self) -> Result<SyncResult, RepositoryError> {
+        self.sync_with_mode(SyncMode::PullOnly)
+    }
 
-        let branch = match repo.head() {
-            Ok(head) if head.is_branch() => head
-                .shorthand()
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| RepositoryError::Storage("failed to resolve current branch".to_string()))?,
-            _ => return Ok(SyncResult::NoBranch),
-        };
-
-        let local_oid = repo
-            .head()
-            .and_then(|head| head.peel_to_commit())
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?
-            .id();
-
-        let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
-        remote
-            .fetch(&[&fetch_refspec], None, None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to fetch remote: {}", e)))?;
-
-        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
-        let remote_oid = match repo.find_reference(&remote_ref_name) {
-            Ok(reference) => reference.target().ok_or_else(|| {
-                RepositoryError::Storage("remote tracking reference has no target".to_string())
-            })?,
-            Err(e) if e.code() == git2::ErrorCode::NotFound => {
-                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-                remote.push(&[&push_refspec], None).map_err(|err| {
-                    RepositoryError::Storage(format!("Failed to push branch to remote: {}", err))
-                })?;
-                return Ok(SyncResult::Pushed { branch });
-            }
-            Err(e) => {
-                return Err(RepositoryError::Storage(format!(
-                    "Failed to read remote tracking branch: {}",
-                    e
-                )))
-            }
-        };
-
-        let (ahead, behind) = repo
-            .graph_ahead_behind(local_oid, remote_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
-
-        if ahead == 0 && behind == 0 {
-            return Ok(SyncResult::UpToDate { branch });
-        }
-
-        if ahead > 0 && behind > 0 {
-            return Ok(SyncResult::Diverged {
-                branch,
-                ahead,
-                behind,
-            });
-        }
-
-        if behind > 0 {
-            let local_ref_name = format!("refs/heads/{}", branch);
-            let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
-                RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
-            })?;
-
-            local_ref.set_target(remote_oid, "penna sync fast-forward").map_err(|e| {
-                RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
-            })?;
-
-            repo.set_head(&local_ref_name)
-                .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
-
-            repo.checkout_head(Some(CheckoutBuilder::new().force()))
-                .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
-
-            return Ok(SyncResult::Pulled { branch });
-        }
-
-        let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-        remote.push(&[&push_refspec], None).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
-        })?;
-
-        Ok(SyncResult::Pushed { branch })
+    fn push(&self) -> Result<SyncResult, RepositoryError> {
+        self.sync_with_mode(SyncMode::PushOnly)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penna_core::ports::JournalSync;
+    use penna_core::ports::{JournalClone, JournalPath, JournalSync};
     use tempfile::TempDir;
 
     fn create_test_repo() -> (TempDir, GitEntryRepository) {
@@ -697,5 +917,144 @@ mod tests {
         let pulled = repo_b.get("202608091511").unwrap();
         assert!(pulled.is_some());
         assert_eq!(pulled.unwrap().title, "Second");
+    }
+
+    #[test]
+    fn test_clone_journal_clones_remote_repository() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let clone_parent = TempDir::new().unwrap();
+        let clone_target = clone_parent.path().join("journal-clone");
+
+        let cloner = GitJournalCloner;
+        cloner
+            .clone_journal(remote_dir.path().to_str().unwrap(), &clone_target)
+            .unwrap();
+
+        assert!(clone_target.join(".git").exists());
+    }
+
+    #[test]
+    fn test_pull_returns_no_remote_when_origin_missing() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        let result = repo.pull().unwrap();
+
+        assert_eq!(result, SyncResult::NoRemote);
+    }
+
+    #[test]
+    fn test_push_returns_no_remote_when_origin_missing() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        let result = repo.push().unwrap();
+
+        assert_eq!(result, SyncResult::NoRemote);
+    }
+
+    #[test]
+    fn test_push_pushes_local_commits() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_dir, repo) = create_test_repo();
+        add_origin_remote(&repo, remote_dir.path());
+
+        repo.save(&Entry {
+            id: EntryId("202608131601".to_string()),
+            title: "Push target".to_string(),
+            body: "Body".to_string(),
+            tags: vec![],
+            created_at: "2026-08-13T16:01:00+00:00".to_string(),
+            updated_at: "2026-08-13T16:01:00+00:00".to_string(),
+        })
+        .unwrap();
+
+        let result = repo.push().unwrap();
+        assert!(matches!(result, SyncResult::Pushed { .. }));
+    }
+
+    #[test]
+    fn test_pull_fast_forwards_when_remote_ahead() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_dir_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608131602".to_string()),
+                title: "Base".to_string(),
+                body: "Body".to_string(),
+                tags: vec![],
+                created_at: "2026-08-13T16:02:00+00:00".to_string(),
+                updated_at: "2026-08-13T16:02:00+00:00".to_string(),
+            })
+            .unwrap();
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned_repo = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned_repo);
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608131603".to_string()),
+                title: "New remote".to_string(),
+                body: "Body".to_string(),
+                tags: vec![],
+                created_at: "2026-08-13T16:03:00+00:00".to_string(),
+                updated_at: "2026-08-13T16:03:00+00:00".to_string(),
+            })
+            .unwrap();
+        repo_a.push().unwrap();
+
+        let result = repo_b.pull().unwrap();
+        assert!(matches!(result, SyncResult::Pulled { .. }));
+    }
+
+    #[test]
+    fn test_resolve_path_returns_canonical_path() {
+        let (tmp_dir, repo) = create_test_repo();
+        let resolved = repo.resolve_path().unwrap();
+
+        assert_eq!(resolved, tmp_dir.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_tag_catalog_add_list_update_remove() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        let added = repo.add_tag("work").unwrap();
+        assert_eq!(added, vec!["work".to_string()]);
+
+        let added = repo.add_tag("daily").unwrap();
+        assert_eq!(added, vec!["daily".to_string(), "work".to_string()]);
+
+        let renamed = repo.update_tag("daily", "journal").unwrap();
+        assert_eq!(renamed, vec!["journal".to_string(), "work".to_string()]);
+
+        let removed = repo.remove_tag("work").unwrap();
+        assert_eq!(removed, vec!["journal".to_string()]);
+    }
+
+    #[test]
+    fn test_tag_catalog_persists_to_penna_tags_json() {
+        let (tmp_dir, repo) = create_test_repo();
+
+        repo.add_tag("idea").unwrap();
+        repo.add_tag("todo").unwrap();
+
+        let path = tmp_dir.path().join(".penna/tags.json");
+        assert!(path.exists());
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"tags\""));
+
+        let reopened = GitEntryRepository::new(tmp_dir.path().to_path_buf()).unwrap();
+        let tags = reopened.list_tags().unwrap();
+        assert_eq!(tags, vec!["idea".to_string(), "todo".to_string()]);
     }
 }

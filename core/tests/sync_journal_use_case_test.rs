@@ -10,6 +10,14 @@ impl JournalSync for FakeJournalSync {
     fn sync(&self) -> Result<SyncResult, RepositoryError> {
         self.result.clone()
     }
+
+    fn pull(&self) -> Result<SyncResult, RepositoryError> {
+        self.result.clone()
+    }
+
+    fn push(&self) -> Result<SyncResult, RepositoryError> {
+        self.result.clone()
+    }
 }
 
 #[test]
