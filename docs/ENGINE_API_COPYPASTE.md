@@ -20,8 +20,6 @@ pub fn add_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, Engine
 pub fn remove_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn update_tag(&self, session_id: &str, old_tag: &str, new_tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
-
-// Proposed
 pub fn clone_journal(&self, request: CloneJournalRequest) -> Result<JournalSession, EngineError>;
 pub fn resolve_journal_path(&self, session_id: &str) -> Result<ResolveJournalPathResponse, EngineError>;
 pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
@@ -63,6 +61,11 @@ Global tag catalog storage (implemented):
   "tags": ["work", "idea"]
 }
 ```
+
+Tag policy (implemented):
+
+- `remove_tag(session_id, tag)` removes selected tag from catalog and from all notes.
+- `update_tag(session_id, old_tag, new_tag)` renames selected tag in catalog and across all notes.
 
 ## DTOs
 

@@ -1,6 +1,6 @@
 # ADR 0001: Repository Lifecycle APIs
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-13
 
 ## Context
@@ -87,10 +87,10 @@ Tradeoffs:
 2. Do clone in frontend and only connect in engine.
    - Rejected by architecture rule; frontend should not call git directly.
 
-## Rollout Plan
+## Rollout Status
 
-1. Add new use cases in `core/application` with tests in `core/tests`.
-2. Add/extend sync port traits in `core/ports` for directional operations.
-3. Implement in `adapters/git` and add adapter integration tests.
-4. Wire in `engine` and add engine API tests.
-5. Keep `sync_journal` as convenience API.
+1. Completed: use cases in `core/application` with tests in `core/tests`.
+2. Completed: sync port traits extended in `core/ports` for directional operations.
+3. Completed: implemented in `adapters/git` with adapter integration tests.
+4. Completed: wired in `engine` with engine API tests.
+5. Completed: `sync_journal` kept as convenience API.

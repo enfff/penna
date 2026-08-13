@@ -24,6 +24,11 @@ struct TagsCatalogFile {
     tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EntryTagsSidecar {
+    tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryStatus {
     pub branch: Option<String>,
@@ -194,8 +199,16 @@ impl GitEntryRepository {
         Path::new(".penna/tags.json")
     }
 
+    fn entry_tags_relative_path(id: &str) -> PathBuf {
+        PathBuf::from(format!(".penna/{}.json", id))
+    }
+
     fn tags_file_absolute_path(&self) -> PathBuf {
         self.root.join(Self::tags_file_relative_path())
+    }
+
+    fn entry_tags_absolute_path(&self, id: &str) -> PathBuf {
+        self.root.join(Self::entry_tags_relative_path(id))
     }
 
     fn normalize_tags(mut tags: Vec<String>) -> Vec<String> {
@@ -223,6 +236,92 @@ impl GitEntryRepository {
         })?;
 
         Ok(Self::normalize_tags(parsed.tags))
+    }
+
+    fn read_entry_tags_from_disk(&self, id: &str) -> Result<Vec<String>, RepositoryError> {
+        let path = self.entry_tags_absolute_path(id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let bytes = std::fs::read(&path).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to read entry tags sidecar {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        let parsed: EntryTagsSidecar = serde_json::from_slice(&bytes).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to parse entry tags sidecar {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        Ok(Self::normalize_tags(parsed.tags))
+    }
+
+    fn write_entry_tags_sidecar_to_disk(&self, id: &str, tags: Vec<String>) -> Result<(), RepositoryError> {
+        let normalized = Self::normalize_tags(tags);
+        let file_path = self.entry_tags_absolute_path(id);
+
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to create sidecar parent directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        let payload = EntryTagsSidecar { tags: normalized };
+        let content = serde_json::to_vec_pretty(&payload).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to encode entry tags sidecar: {}", e))
+        })?;
+
+        std::fs::write(&file_path, content).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to write entry tags sidecar {}: {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    fn list_entry_ids_from_head(&self) -> Result<Vec<String>, RepositoryError> {
+        let mut entry_ids: Vec<String> = Vec::new();
+
+        let commit_oid = match self.get_head_oid()? {
+            Some(oid) => oid,
+            None => return Ok(vec![]),
+        };
+
+        let repo = self.repo.lock().unwrap();
+
+        let commit = repo
+            .find_commit(commit_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
+
+        let tree = commit
+            .tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
+
+        for entry in tree.iter() {
+            if entry.filemode() == git2::FileMode::Blob as i32 || entry.filemode() == 33188 {
+                let path_str = entry.name().unwrap_or("");
+                if path_str.ends_with(".md") {
+                    let id = path_str[..path_str.len() - 3].to_string();
+                    entry_ids.push(id);
+                }
+            }
+        }
+
+        Ok(entry_ids)
     }
 
     fn write_tags_to_disk_and_commit(&self, tags: Vec<String>, message: &str) -> Result<Vec<String>, RepositoryError> {
@@ -462,7 +561,15 @@ impl TagCatalog for GitEntryRepository {
     fn remove_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError> {
         let mut tags = self.read_tags_from_disk()?;
         tags.retain(|t| t != tag);
-        self.write_tags_to_disk_and_commit(tags, &format!("Remove tag {}", tag))
+        let updated = self.write_tags_to_disk_and_commit(tags, &format!("Remove tag {}", tag))?;
+
+        for id in self.list_entry_ids_from_head()? {
+            let mut entry_tags = self.read_entry_tags_from_disk(&id)?;
+            entry_tags.retain(|t| t != tag);
+            self.write_entry_tags_sidecar_to_disk(&id, entry_tags)?;
+        }
+
+        Ok(updated)
     }
 
     fn update_tag(&self, old_tag: &str, new_tag: &str) -> Result<Vec<String>, RepositoryError> {
@@ -472,7 +579,22 @@ impl TagCatalog for GitEntryRepository {
         };
 
         tags[position] = new_tag.to_string();
-        self.write_tags_to_disk_and_commit(tags, &format!("Rename tag {} to {}", old_tag, new_tag))
+        let updated = self.write_tags_to_disk_and_commit(
+            tags,
+            &format!("Rename tag {} to {}", old_tag, new_tag),
+        )?;
+
+        for id in self.list_entry_ids_from_head()? {
+            let mut entry_tags = self.read_entry_tags_from_disk(&id)?;
+            for value in &mut entry_tags {
+                if value == old_tag {
+                    *value = new_tag.to_string();
+                }
+            }
+            self.write_entry_tags_sidecar_to_disk(&id, entry_tags)?;
+        }
+
+        Ok(updated)
     }
 }
 
@@ -489,7 +611,8 @@ impl EntryRepository for GitEntryRepository {
         
         match content {
             Some(content) => {
-                let entry = Self::parse_entry_content(id, &content)?;
+                let mut entry = Self::parse_entry_content(id, &content)?;
+                entry.tags = self.read_entry_tags_from_disk(id)?;
                 Ok(Some(entry))
             }
             None => Ok(None),
@@ -509,60 +632,34 @@ impl EntryRepository for GitEntryRepository {
                 e
             ))
         })?;
-        
+
+        self.write_entry_tags_sidecar_to_disk(&entry.id.0, entry.tags.clone())?;
+
         let repo = self.repo.lock().unwrap();
-        
-        let head = repo.head();
-        let parent_commit_oid = match head {
-            Ok(head) if head.is_branch() => {
-                let commit = head.peel_to_commit()
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?;
-                Some(commit.id())
-            }
-            _ => None,
-        };
-        
-        let mut builder = match parent_commit_oid {
-            Some(commit_oid) => {
-                let commit = repo.find_commit(commit_oid)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
-                let tree = commit.tree()
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
-                repo.treebuilder(Some(&tree))
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to create tree builder: {}", e)))?
-            }
-            None => {
-                repo.treebuilder(None)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to create tree builder: {}", e)))?
-            }
-        };
+        let mut index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
 
-        let blob_oid = repo
-            .blob(content.as_bytes())
-            .map_err(|e| RepositoryError::Storage(format!("Failed to create blob: {}", e)))?;
+        index
+            .add_path(&entry_path)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add entry to index: {}", e)))?;
+        index
+            .add_path(&Self::entry_tags_relative_path(&entry.id.0))
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add sidecar to index: {}", e)))?;
+        index
+            .write()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
 
-        builder.insert(
-            &entry_path,
-            blob_oid,
-            git2::FileMode::Blob.into(),
-        ).map_err(|e| RepositoryError::Storage(format!("Failed to insert file: {}", e)))?;
+        let tree_oid = index
+            .write_tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
 
-        let tree_oid = builder.write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write tree: {}", e)))?;
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
 
-        let tree = repo.find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find tree: {}", e)))?;
-
-        let parent_commit = parent_commit_oid
-            .and_then(|oid| repo.find_commit(oid).ok());
-
-        let parents: Vec<&git2::Commit> = {
-            match parent_commit.as_ref() {
-                Some(commit) => vec![commit],
-                None => vec![],
-            }
-        };
-        
         repo.commit(
             Some("HEAD"),
             &sig,
@@ -579,7 +676,9 @@ impl EntryRepository for GitEntryRepository {
     fn delete(&self, id: &str) -> Result<(), RepositoryError> {
         let repo = self.repo.lock().unwrap();
         let entry_path = self.entry_path(id);
+        let entry_tags_path = Self::entry_tags_relative_path(id);
         let absolute_entry_path = self.root.join(&entry_path);
+        let absolute_entry_tags_path = self.root.join(&entry_tags_path);
 
         if absolute_entry_path.exists() {
             std::fs::remove_file(&absolute_entry_path).map_err(|e| {
@@ -591,49 +690,47 @@ impl EntryRepository for GitEntryRepository {
             })?;
         }
 
-        let head = repo.head();
-        let parent_commit_oid = match head {
-            Ok(head) if head.is_branch() => {
-                let commit = head.peel_to_commit()
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?;
-                Some(commit.id())
-            }
-            _ => return Ok(()),
-        };
-
-        let mut builder = match parent_commit_oid {
-            Some(commit_oid) => {
-                let commit = repo.find_commit(commit_oid)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
-                let tree = commit.tree()
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
-                repo.treebuilder(Some(&tree))
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to create tree builder: {}", e)))?
-            }
-            None => return Ok(()),
-        };
-
-        builder.remove(&entry_path)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to remove file: {}", e)))?;
-
-        let tree_oid = builder.write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write tree: {}", e)))?;
-
-        let tree = repo.find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find tree: {}", e)))?;
-
-        let parent_commit = parent_commit_oid
-            .and_then(|oid| repo.find_commit(oid).ok());
+        if absolute_entry_tags_path.exists() {
+            std::fs::remove_file(&absolute_entry_tags_path).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to remove sidecar file {}: {}",
+                    absolute_entry_tags_path.display(),
+                    e
+                ))
+            })?;
+        }
 
         let sig = self.create_signature()?;
-        
-        let parents: Vec<&git2::Commit> = {
-            match parent_commit.as_ref() {
-                Some(commit) => vec![commit],
-                None => vec![],
-            }
-        };
-        
+        let mut index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+
+        index
+            .remove_path(&entry_path)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to remove entry from index: {}", e)))?;
+
+        if self.root.join(&entry_tags_path).exists() {
+            index.remove_path(&entry_tags_path).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to remove sidecar from index: {}", e))
+            })?;
+        } else {
+            let _ = index.remove_path(&entry_tags_path);
+        }
+
+        index
+            .write()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+
+        let tree_oid = index
+            .write_tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
+
         repo.commit(
             Some("HEAD"),
             &sig,
@@ -804,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn test_plain_markdown_storage_does_not_persist_tags() {
+    fn test_entry_tags_persist_in_sidecar() {
         let (_tmp_dir, repo) = create_test_repo();
 
         let entry = Entry {
@@ -819,7 +916,10 @@ mod tests {
         repo.save(&entry).unwrap();
 
         let loaded = repo.get("test-tags").unwrap().unwrap();
-        assert!(loaded.tags.is_empty());
+        assert_eq!(
+            loaded.tags,
+            vec!["daily-note".to_string(), "work".to_string()]
+        );
     }
 
     #[test]
@@ -1056,5 +1156,44 @@ mod tests {
         let reopened = GitEntryRepository::new(tmp_dir.path().to_path_buf()).unwrap();
         let tags = reopened.list_tags().unwrap();
         assert_eq!(tags, vec!["idea".to_string(), "todo".to_string()]);
+    }
+
+    #[test]
+    fn test_remove_and_update_tag_affect_all_notes() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        repo.save(&Entry {
+            id: EntryId("202608131701".to_string()),
+            title: "One".to_string(),
+            body: "Body".to_string(),
+            tags: vec!["work".to_string(), "daily".to_string()],
+            created_at: "2026-08-13T17:01:00+00:00".to_string(),
+            updated_at: "2026-08-13T17:01:00+00:00".to_string(),
+        })
+        .unwrap();
+
+        repo.save(&Entry {
+            id: EntryId("202608131702".to_string()),
+            title: "Two".to_string(),
+            body: "Body".to_string(),
+            tags: vec!["work".to_string(), "idea".to_string()],
+            created_at: "2026-08-13T17:02:00+00:00".to_string(),
+            updated_at: "2026-08-13T17:02:00+00:00".to_string(),
+        })
+        .unwrap();
+
+        repo.add_tag("work").unwrap();
+        repo.add_tag("daily").unwrap();
+
+        repo.update_tag("daily", "journal").unwrap();
+        let first = repo.get("202608131701").unwrap().unwrap();
+        assert!(first.tags.contains(&"journal".to_string()));
+        assert!(!first.tags.contains(&"daily".to_string()));
+
+        repo.remove_tag("work").unwrap();
+        let first = repo.get("202608131701").unwrap().unwrap();
+        let second = repo.get("202608131702").unwrap().unwrap();
+        assert!(!first.tags.contains(&"work".to_string()));
+        assert!(!second.tags.contains(&"work".to_string()));
     }
 }

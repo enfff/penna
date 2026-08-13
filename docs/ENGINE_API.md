@@ -11,12 +11,13 @@ Engine API is frontend-agnostic. Any frontend (web, desktop, mobile, CLI) calls 
 1. Entry files are plain Markdown only.
 2. Entry filename/id format is `YYYYMMDDHHmm.md`.
 3. Engine resolves same-minute collisions by moving to next available minute slot.
-4. Planned tags metadata storage: `.penna/YYYYMMDDHHmm.json`.
-5. Planned sidecar JSON v1 shape: `{ "tags": ["..."] }`.
+4. Tags metadata storage: `.penna/YYYYMMDDHHmm.json`.
+5. Sidecar JSON v1 shape: `{ "tags": ["..."] }`.
+6. Global tag catalog storage: `.penna/tags.json`.
 
 ## Methods
 
-## Tags + Sidecar Behavior (Planned v1)
+## Tags + Sidecar Behavior (v1)
 
 Frontend keeps using existing entry APIs.
 No new frontend-facing tag API required.
@@ -28,10 +29,9 @@ Flow:
 3. Engine/adapters persist tags in `.penna/<entry_id>.json`.
 4. Missing sidecar is non-fatal; tags default to empty list.
 
-## Planned Repository Lifecycle APIs (Proposed)
+## Repository Lifecycle APIs
 
-These methods are proposed for remote-first onboarding and explicit sync controls.
-Current implementation already supports `connect_journal` and `sync_journal`.
+These methods are implemented for remote-first onboarding and explicit sync controls.
 
 ### clone_journal
 
@@ -113,6 +113,76 @@ Output:
   "behind": null
 }
 ```
+
+### list_tags
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000" }
+```
+
+Output:
+
+```json
+{ "tags": ["daily", "work"] }
+```
+
+### add_tag
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000", "tag": "work" }
+```
+
+Output:
+
+```json
+{ "tags": ["daily", "work"] }
+```
+
+### remove_tag
+
+Input:
+
+```json
+{ "session_id": "session-1754733553000000000", "tag": "work" }
+```
+
+Output:
+
+```json
+{ "tags": ["daily"] }
+```
+
+Behavior:
+
+1. Removes selected tag from global catalog.
+2. Removes selected tag from all notes.
+
+### update_tag
+
+Input:
+
+```json
+{
+  "session_id": "session-1754733553000000000",
+  "old_tag": "daily",
+  "new_tag": "journal"
+}
+```
+
+Output:
+
+```json
+{ "tags": ["journal", "work"] }
+```
+
+Behavior:
+
+1. Renames selected tag in global catalog.
+2. Renames selected tag across all notes.
 
 ### connect_journal
 
