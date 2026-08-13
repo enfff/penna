@@ -11,8 +11,22 @@ Engine API is frontend-agnostic. Any frontend (web, desktop, mobile, CLI) calls 
 1. Entry files are plain Markdown only.
 2. Entry filename/id format is `YYYYMMDDHHmm.md`.
 3. Engine resolves same-minute collisions by moving to next available minute slot.
+4. Planned tags metadata storage: `.penna/YYYYMMDDHHmm.json`.
+5. Planned sidecar JSON v1 shape: `{ "tags": ["..."] }`.
 
 ## Methods
+
+## Tags + Sidecar Behavior (Planned v1)
+
+Frontend keeps using existing entry APIs.
+No new frontend-facing tag API required.
+
+Flow:
+
+1. Send tags in `create_entry` / `update_entry` request.
+2. Read tags from `get_entry` / `list_entries` response.
+3. Engine/adapters persist tags in `.penna/<entry_id>.json`.
+4. Missing sidecar is non-fatal; tags default to empty list.
 
 ### connect_journal
 
@@ -265,7 +279,7 @@ Input:
 ```json
 {
   "entry_id": "202608091131",
-  "sidecar_json": "{\"schema_version\":1,\"entry_id\":\"202608091131\",\"generated_at\":\"2026-08-09T11:35:05+00:00\",\"blocks\":[],\"attachments\":null,\"revisions\":null}"
+  "sidecar_json": "{\"tags\":[\"daily\",\"edited\"]}"
 }
 ```
 

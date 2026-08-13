@@ -1,15 +1,15 @@
 # DATA_MODEL.md
 
-Status: v1 storage contract.
-Scope: entry storage, file naming, and current persistence rules.
+Status: v1 storage contract + planned tags sidecar contract.
+Scope: entry storage, file naming, and tags metadata persistence path.
 
 This document defines what Penna persists today.
 It favors the real v1 product loop over a richer future model.
 
 ## Core Data Principle
 
-Plain Markdown is the durable source of truth.
-For v1, each entry is a single Markdown file that remains human-readable without Penna.
+Plain Markdown is durable source of truth for note body.
+Tags metadata persists in optional sidecar JSON file.
 
 ## Journal Layout
 
@@ -18,6 +18,10 @@ A journal is a git repository with Markdown entries at the repo root.
 ```text
 journal-root/
 ├── .git/
+├── .penna/
+│   ├── YYYYMMDDHHmm.json
+│   ├── YYYYMMDDHHmm.json
+│   └── ...
 ├── YYYYMMDDHHmm.md
 ├── YYYYMMDDHHmm.md
 └── ...
@@ -29,7 +33,7 @@ Rules:
 2. Entry id is the filename without `.md`.
 3. Files are plain Markdown only.
 4. No required frontmatter in v1.
-5. No required sidecar files in v1.
+5. Tags sidecar path target: `.penna/<entry_id>.json`.
 
 ## Entry File Anatomy
 
@@ -48,7 +52,7 @@ Fallback behavior:
 2. Otherwise, the entry title falls back to `Untitled`.
 3. The file body remains standard Markdown text.
 
-## Current Persisted Model
+## Current / Planned Persisted Model
 
 The engine `Entry` model currently includes:
 
@@ -59,25 +63,37 @@ The engine `Entry` model currently includes:
 - `created_at`
 - `updated_at`
 
-Persistence rules for v1:
+Persistence rules:
 
 1. `id` persists via filename.
 2. `title` persists via the first heading in the Markdown body.
 3. `body` persists as Markdown text.
-4. `tags` are not durably stored in the file format yet.
-5. `created_at` and `updated_at` are not durably stored in the file format yet.
+4. `tags` planned durable storage in `.penna/<id>.json` as JSON array.
+5. `created_at` and `updated_at` are not durably stored in markdown file format yet.
 
-This is intentional for v1 simplicity.
+Sidecar JSON v1 (minimal):
+
+```json
+{
+	"tags": ["work", "idea"]
+}
+```
+
+Behavior target:
+
+1. Missing sidecar => tags default to empty list.
+2. Malformed sidecar => non-fatal fallback to empty tags.
+3. Delete entry removes both `.md` and matching `.penna/<id>.json`.
 
 ## Deferred Metadata Model
 
-The richer metadata model is deferred.
+Richer metadata model beyond tags sidecar is deferred.
 This includes:
 
 1. YAML frontmatter persistence.
 2. Unknown frontmatter preservation.
-3. `penna_sidecar` file references.
-4. Sidecar file lifecycle.
+3. Rich sidecar fields (attachments/revisions/blocks).
+4. Full sidecar integrity/repair workflows.
 5. Rich block fidelity beyond plain Markdown.
 
 These may return in a future version once the editor and sync flows require them.

@@ -18,6 +18,31 @@ pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
 ```
 
+## Planned Tags Sidecar Contract (v1)
+
+No new engine methods required for frontend tag CRUD.
+Frontend keeps using existing entry APIs with `tags` field.
+
+Storage target (adapter-level):
+
+- Entry body: `YYYYMMDDHHmm.md`
+- Entry tags sidecar: `.penna/YYYYMMDDHHmm.json`
+
+Sidecar JSON target shape:
+
+```json
+{
+  "tags": ["work", "idea"]
+}
+```
+
+Behavior target:
+
+- `create_entry`/`update_entry`: persist `tags` into `.penna/<id>.json`.
+- `get_entry`/`list_entries`: hydrate `tags` from `.penna/<id>.json`.
+- missing sidecar: return empty tags, no hard failure.
+- malformed sidecar: return empty tags + integrity warning path via `sidecar_integrity_status`.
+
 ## DTOs
 
 ```rust
@@ -137,7 +162,7 @@ pub struct SyncReport {
   },
   "sidecar_integrity_status": {
     "entry_id": "202608091130",
-    "sidecar_json": "{\"schema_version\":1,\"entry_id\":\"202608091130\",\"generated_at\":\"2026-08-09T11:30:00+00:00\",\"blocks\":[],\"attachments\":null,\"revisions\":null}"
+    "sidecar_json": "{\"tags\":[\"daily\",\"work\"]}"
   }
 }
 ```

@@ -53,6 +53,6 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 ## Near-Term Engine Milestones
 
 1. Entry lifecycle v1: create/get/list/update/delete with strict invariants and tests.
-2. Plain Markdown storage contract that matches the real editor/frontend behavior.
+2. Plain Markdown body storage plus `.penna/<id>.json` tags sidecar contract.
 3. Sync API for pull/push or unified journal sync with structured status reporting.
 4. Engine API surface that frontends can consume without touching adapters directly.
