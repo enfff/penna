@@ -248,13 +248,14 @@ impl From<Entry> for EntryDto {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct SessionState {
     repo: GitEntryRepository,
     repo_path: PathBuf,
     connected_at: String,
 }
 
+#[derive(Debug)]
 pub struct PennaEngine {
     sessions: Mutex<HashMap<String, SessionState>>,
 }

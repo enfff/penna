@@ -42,6 +42,14 @@ pub struct GitEntryRepository {
     root: PathBuf,
 }
 
+impl std::fmt::Debug for GitEntryRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitEntryRepository")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
+}
+
 impl GitEntryRepository {
     pub fn new(path: std::path::PathBuf) -> Result<Self, RepositoryError> {
         let repo_path = path.join(".git");
