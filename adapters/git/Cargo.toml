@@ -1,9 +1,9 @@
 [package]
 name = "penna-adapters-git"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Git adapter for Penna journaling engine"
-license = "UNLICENSED"
+license.workspace = true
 
 [dependencies]
 penna-core = { version = "0.1.0", path = "../../core" }

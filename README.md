@@ -34,7 +34,7 @@ gui/            # GUI application (future)
 
 ### Prerequisites
 
-- Rust toolchain (1.70+)
+- Rust toolchain (1.85+, workspace uses edition 2024)
 
 ### Building the Engine
 
@@ -60,6 +60,30 @@ cargo run -p penna-cli
 # TUI (when implemented)
 cargo run -p penna-tui
 ```
+
+## Releases
+
+The engine is distributed as a **private registry via git tags** on the
+private GitHub remote. All five crates share one lockstep version
+(ADR 0002PUBLISHING.md`](docs/PUBLISHING.md) - Versioning, tags, and the private release process
+- [`docs/).
+
+```bash
+# bump + commit + tag vX.Y.Z
+scripts/bump-version.sh 0.1.1
+
+# publish (tag push = publish)
+git push origin main && git push origin vX.Y.Z
+```
+
+Consumers pin a tag:
+
+```toml
+penna-engine = { git = "https://github.com/<owner>/penna", tag = "v0.1.0" }
+```
+
+See [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for the full release
+process, the one-time remote setup, and why not crates.io.
 
 ## Documentation
 

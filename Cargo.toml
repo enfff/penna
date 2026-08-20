@@ -7,3 +7,11 @@ members = [
  "adapters/markdown",
  "engine",
 ]
+
+# Single source of truth for the version of every crate in the workspace.
+# Bump here only (or via scripts/bump-version.sh). All members inherit this
+# value, so a workspace bump publishes a consistent set across the board.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"

@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use penna_core::application::{CreateEntryError, CreateEntryInput, CreateEntryUseCase};
+use penna_core::application::{CreateEntryInput, CreateEntryUseCase};
 use penna_core::domain::Entry;
 use penna_core::ports::{EntryRepository, RepositoryError};
 
@@ -61,18 +61,23 @@ fn create_entry_persists_entry() {
 }
 
 #[test]
-fn create_entry_rejects_empty_title() {
+fn create_entry_allows_blank_title() {
+    // Blank titles must be accepted: "new blank note" and "delete heading
+    // then save" are both valid user flows. The title is stored as given.
     let repository = FakeEntryRepository::default();
     let use_case = CreateEntryUseCase::new(repository);
 
-    let result = use_case.execute(CreateEntryInput {
-        id: "entry-2".to_string(),
-        title: "   ".to_string(),
-        body: "No title".to_string(),
-        tags: Vec::new(),
-        created_at: "2026-08-04T00:00:00Z".to_string(),
-        updated_at: "2026-08-04T00:00:00Z".to_string(),
-    });
+    let created = use_case
+        .execute(CreateEntryInput {
+            id: "entry-2".to_string(),
+            title: "   ".to_string(),
+            body: "No title".to_string(),
+            tags: Vec::new(),
+            created_at: "2026-08-04T00:00:00Z".to_string(),
+            updated_at: "2026-08-04T00:00:00Z".to_string(),
+        })
+        .expect("blank title must be accepted");
 
-    assert!(matches!(result, Err(CreateEntryError::Domain(_))));
+    // Stored verbatim: a blank title round-trips as a blank Markdown heading.
+    assert_eq!(created.title, "   ");
 }

@@ -106,10 +106,11 @@ impl Entry {
         created_at: String,
         updated_at: String,
     ) -> Result<Self, DomainError> {
-        if title.trim().is_empty() {
-            return Err(DomainError::EmptyTitle);
-        }
-
+        // Blank titles are intentionally allowed: "new blank note" and
+        // "delete heading then save" must both work. The title is stored as
+        // given; an empty title round-trips as an empty Markdown heading.
+        // (DomainError::EmptyTitle is retained so the public error surface is
+        // unchanged for existing consumers.)
         Ok(Self {
             id,
             title,
