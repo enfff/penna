@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 description = "Penna core domain and application logic"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

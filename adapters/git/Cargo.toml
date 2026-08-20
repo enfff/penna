@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 description = "Git adapter for Penna journaling engine"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 penna-core = { version = "0.1.0", path = "../../core" }

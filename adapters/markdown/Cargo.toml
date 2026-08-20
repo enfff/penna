@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "Markdown adapter for Penna journaling engine"
 license.workspace = true
+# Not part of the published engine dependency graph. Set to true (and add
+# the metadata inherited by the other crates) before publishing it standalone.
+publish = false
 
 [dependencies]
 penna-core = { version = "0.1.0", path = "../../core" }

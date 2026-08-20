@@ -84,13 +84,48 @@ it means "see me" rather than a license grant — fine for a private
 registry. If this ever moves to public crates.io, pick a real SPDX id
 first (`workspace.package.license`).
 
-## Why not crates.io
+## crates.io (public option)
 
-crates.io has no private packages. Publishing there is a public release:
-anyone can find and build against `penna-engine`. If the code is meant to
-stay private, crates.io is not an option. (It remains the fallback if the
-project is ever open-sourced; the versions would then reuse the existing
-tag numbers 1:1.)
+crates.io has **no private tier**. Publishing there is a public release:
+the full sources of `penna-core`, `penna-adapters-git`, and
+`penna-engine` (everything in the engine's dependency chain) become
+downloadable by anyone, including git2, serde, etc. That is the price of
+being discoverable in `cargo search`.
+
+Prepared state:
+
+- The three publishable crates carry full metadata (description, license,
+  repository, homepage, keywords, categories, rust-version), inherited
+  from `[workspace.package]`.
+- `penna-adapters-fs` and `penna-adapters-markdown` have
+  `publish = false` — they are not in the engine's dependency graph.
+  Set them to publishable when they join it.
+- The versions stay 1:1 with the git tag numbers (ADR 0002): v0.1.0 of
+  git = 0.1.0 on crates.io.
+
+Publishing (token from crates.io -> "Account" -> "API Tokens"):
+
+```bash
+cargo login <TOKEN>          # or: export CARGO_TOKEN=<token>
+
+# order matters: dependencies first
+cargo publish -p penna-core
+cargo publish -p penna-adapters-git
+cargo publish -p penna-engine
+```
+
+Pre-publish validation (catches missing metadata / wrong file inclusion
+before a version is burned — crate versions can never be republished):
+
+```bash
+cargo publish --dry-run -p penna-core
+cargo publish --dry-run -p penna-adapters-git
+cargo publish --dry-run -p penna-engine
+```
+
+Publish only from a tagged, tested commit; tag first
+(`scripts/bump-version.sh X.Y.Z`), then publish, so every consumed version
+resolves the same way from both registries.
 
 ## A note on path dependencies
 

@@ -11,7 +11,17 @@ members = [
 # Single source of truth for the version of every crate in the workspace.
 # Bump here only (or via scripts/bump-version.sh). All members inherit this
 # value, so a workspace bump publishes a consistent set across the board.
+#
+# `repository`, `homepage`, `keywords`, `categories`, and `rust-version`
+# are publication metadata inherited by every member crate, including the
+# ones that get published to crates.io (penna-core, penna-adapters-git,
+# penna-engine).
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "UNLICENSED"
+repository = "https://github.com/enfff/penna"
+homepage = "https://github.com/enfff/penna"
+rust-version = "1.85"
+keywords = ["journal", "journaling", "markdown", "local-first", "notes"]
+categories = ["text-processing", "development-tools"]
