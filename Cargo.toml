@@ -5,7 +5,7 @@ members = [
  "adapters/git",
  "adapters/fs",
  "adapters/markdown",
- "engine",
+ "engine", "probe",
 ]
 
 # Single source of truth for the version of every crate in the workspace.
