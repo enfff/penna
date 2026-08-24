@@ -55,7 +55,7 @@ The agent must check the existing ADRs before it proposes a decision. The agent 
 
 The agent can use the GitHub Copilot prompts in `.github/prompts/`.
 
-Legacy aliases are also preserved in `.opencode/command/` and `.opencode/skill/`.
+Legacy aliases are also preserved in `.opencode/commands/` for opencode.
 These files map to the Copilot prompts so existing muscle-memory commands still work.
 
 | Prompt | Purpose |

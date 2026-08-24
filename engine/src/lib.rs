@@ -29,6 +29,17 @@ pub enum EngineError {
     IdCollision(String),
 }
 
+/// Stable public error codes (ADR 0009). This set is closed: adding a code
+/// requires an ADR and a minor version bump. Frontends switch on these
+/// strings; `EngineError::message` text is never contractual.
+pub const PUBLIC_ERROR_CODES: [&str; 5] = [
+    "NOT_CONNECTED",
+    "IO",
+    "REPO",
+    "VALIDATION",
+    "CONFLICT",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineErrorDto {
     pub code: String,

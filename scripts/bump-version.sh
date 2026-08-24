@@ -114,7 +114,7 @@ if [[ "$DO_COMMIT" -eq 1 && -d .git ]]; then
     echo "bumped: $CURRENT -> $VERSION"
     echo "committed + tagged v$VERSION"
     echo ""
-    echo "publish:  git push origin main && git push origin v$VERSION"
+    echo "publish:  git push origin master && git push origin v$VERSION"
 else
     echo "bumped: $CURRENT -> $VERSION (files only; --no-commit)"
 fi
