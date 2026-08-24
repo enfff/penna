@@ -1,4 +1,4 @@
-use crate::domain::{Document, Entry, EntryConflict, Sidecar};
+use crate::domain::{AttachmentMeta, Document, Entry, EntryConflict, Sidecar};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,20 @@ pub trait ConflictView: Send + Sync {
     /// Creates the reconciling merge commit. Local side wins conflicted
     /// paths; clean paths auto-merge.
     fn reconcile_with_remote(&self) -> Result<(), RepositoryError>;
+}
+
+/// Attachment storage under per-entry directories (ADR 0012). Files are
+/// plain git blobs; the sidecar manifest tracks name and size.
+pub trait AttachmentStore: Send + Sync {
+    fn list_attachments(&self, id: &str) -> Result<Vec<AttachmentMeta>, RepositoryError>;
+    fn get_attachment(&self, id: &str, name: &str) -> Result<Option<Vec<u8>>, RepositoryError>;
+    fn add_attachment(
+        &self,
+        id: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<AttachmentMeta, RepositoryError>;
+    fn remove_attachment(&self, id: &str, name: &str) -> Result<Vec<AttachmentMeta>, RepositoryError>;
 }
 
 pub trait JournalClone: Send + Sync {

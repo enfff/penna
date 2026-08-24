@@ -38,10 +38,12 @@ git, human-browsable, and portable without Penna installed; export strips
 
 ## Architecture Boundary
 
-Attachment I/O belongs to `adapters/fs` behind the existing filesystem
-port; manifest updates go through the sidecar flow. Core/application gains
-use cases; the engine exposes them per the standard layering. No frontend
-touches `<entry_id>/` directories directly.
+Attachment storage is exposed through the `AttachmentStore` port in
+`core/ports` and implemented by `adapters/git`: the files are plain git
+blobs that must join journal history, so they live beside entry I/O in the
+git adapter (which already performs working-tree writes). Core/application
+gains use cases; the engine exposes them per the standard layering. No
+frontend touches `<entry_id>/` directories directly.
 
 ## Alternatives Considered
 

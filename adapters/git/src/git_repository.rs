@@ -1,9 +1,9 @@
 use git2::build::CheckoutBuilder;
 use git2::{Cred, CredentialType, RemoteCallbacks, Repository, Signature};
-use penna_core::domain::{Entry, EntryConflict, EntryId};
+use penna_core::domain::{AttachmentMeta, Entry, EntryConflict, EntryId};
 use penna_core::ports::{
-    ConflictView, EntryRepository, JournalClone, JournalPath, JournalSync, RepositoryError,
-    SyncResult, TagCatalog,
+    AttachmentStore, ConflictView, EntryRepository, JournalClone, JournalPath, JournalSync,
+    RepositoryError, SyncResult, TagCatalog,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -72,9 +72,12 @@ struct TagsCatalogFile {
     tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct EntryTagsSidecar {
+    #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    attachments: Vec<AttachmentMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +351,25 @@ impl GitEntryRepository {
         PathBuf::from(format!(".penna/{}.json", id))
     }
 
+    fn attachment_dir(&self, id: &str) -> PathBuf {
+        self.root.join(id)
+    }
+
+    fn attachment_relative_path(id: &str, name: &str) -> Result<PathBuf, RepositoryError> {
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name == "."
+            || name == ".."
+        {
+            return Err(RepositoryError::Storage(format!(
+                "invalid attachment name: {}",
+                name
+            )));
+        }
+        Ok(PathBuf::from(format!("{}/{}", id, name)))
+    }
+
     fn tags_file_absolute_path(&self) -> PathBuf {
         self.root.join(Self::tags_file_relative_path())
     }
@@ -383,33 +405,30 @@ impl GitEntryRepository {
         Ok(Self::normalize_tags(parsed.tags))
     }
 
-    fn read_entry_tags_from_disk(&self, id: &str) -> Result<Vec<String>, RepositoryError> {
+    fn read_entry_sidecar(&self, id: &str) -> Result<EntryTagsSidecar, RepositoryError> {
         let path = self.entry_tags_absolute_path(id);
         if !path.exists() {
-            return Ok(Vec::new());
+            return Ok(EntryTagsSidecar::default());
         }
 
         let bytes = std::fs::read(&path).map_err(|e| {
             RepositoryError::Storage(format!(
-                "Failed to read entry tags sidecar {}: {}",
+                "Failed to read entry sidecar {}: {}",
                 path.display(),
                 e
             ))
         })?;
 
-        let parsed: EntryTagsSidecar = serde_json::from_slice(&bytes).map_err(|e| {
-            RepositoryError::Storage(format!(
-                "Failed to parse entry tags sidecar {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
-
-        Ok(Self::normalize_tags(parsed.tags))
+        serde_json::from_slice::<EntryTagsSidecar>(&bytes).map_err(|_| {
+            RepositoryError::Storage("malformed sidecar".to_string())
+        })
     }
 
-    fn write_entry_tags_sidecar_to_disk(&self, id: &str, tags: Vec<String>) -> Result<(), RepositoryError> {
-        let normalized = Self::normalize_tags(tags);
+    fn write_entry_sidecar(
+        &self,
+        id: &str,
+        sidecar: &EntryTagsSidecar,
+    ) -> Result<(), RepositoryError> {
         let file_path = self.entry_tags_absolute_path(id);
 
         if let Some(parent) = file_path.parent() {
@@ -422,20 +441,33 @@ impl GitEntryRepository {
             })?;
         }
 
-        let payload = EntryTagsSidecar { tags: normalized };
-        let content = serde_json::to_vec_pretty(&payload).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to encode entry tags sidecar: {}", e))
+        let content = serde_json::to_vec_pretty(sidecar).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to encode entry sidecar: {}", e))
         })?;
 
         std::fs::write(&file_path, content).map_err(|e| {
             RepositoryError::Storage(format!(
-                "Failed to write entry tags sidecar {}: {}",
+                "Failed to write entry sidecar {}: {}",
                 file_path.display(),
                 e
             ))
         })?;
 
         Ok(())
+    }
+
+    fn read_entry_tags_from_disk(&self, id: &str) -> Result<Vec<String>, RepositoryError> {
+        Ok(Self::normalize_tags(self.read_entry_sidecar(id)?.tags))
+    }
+
+    fn write_entry_tags_sidecar_to_disk(
+        &self,
+        id: &str,
+        tags: Vec<String>,
+    ) -> Result<(), RepositoryError> {
+        let mut sidecar = self.read_entry_sidecar(id)?;
+        sidecar.tags = Self::normalize_tags(tags);
+        self.write_entry_sidecar(id, &sidecar)
     }
 
     fn list_entry_ids_from_head(&self) -> Result<Vec<String>, RepositoryError> {
@@ -886,6 +918,17 @@ impl EntryRepository for GitEntryRepository {
         let absolute_entry_path = self.root.join(&entry_path);
         let absolute_entry_tags_path = self.root.join(&entry_tags_path);
 
+        let attachment_dir = self.attachment_dir(id);
+        if attachment_dir.exists() {
+            std::fs::remove_dir_all(&attachment_dir).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to remove attachment directory {}: {}",
+                    attachment_dir.display(),
+                    e
+                ))
+            })?;
+        }
+
         if absolute_entry_path.exists() {
             std::fs::remove_file(&absolute_entry_path).map_err(|e| {
                 RepositoryError::Storage(format!(
@@ -914,6 +957,11 @@ impl EntryRepository for GitEntryRepository {
         index
             .remove_path(&entry_path)
             .map_err(|e| RepositoryError::Storage(format!("Failed to remove entry from index: {}", e)))?;
+
+        if attachment_dir.exists() || index.get_path(&PathBuf::from(id), 0).is_some() {
+            let spec = format!("{}/*", id);
+            let _ = index.remove_all([&spec], None);
+        }
 
         if self.root.join(&entry_tags_path).exists() {
             index.remove_path(&entry_tags_path).map_err(|e| {
@@ -988,6 +1036,202 @@ impl EntryRepository for GitEntryRepository {
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
         Ok(entries)
+    }
+}
+
+impl AttachmentStore for GitEntryRepository {
+    fn list_attachments(&self, id: &str) -> Result<Vec<AttachmentMeta>, RepositoryError> {
+        match self.read_entry_sidecar(id) {
+            Ok(sidecar) => {
+                let mut list = sidecar.attachments;
+                list.sort_by(|a, b| a.name.cmp(&b.name));
+                Ok(list)
+            }
+            Err(_) => self.scan_attachment_dir(id),
+        }
+    }
+
+    fn get_attachment(&self, id: &str, name: &str) -> Result<Option<Vec<u8>>, RepositoryError> {
+        let path = Self::attachment_relative_path(id, name)?;
+        let absolute = self.root.join(&path);
+        if !absolute.exists() {
+            return Ok(None);
+        }
+        std::fs::read(&absolute)
+            .map(Some)
+            .map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to read attachment {}: {}",
+                    absolute.display(),
+                    e
+                ))
+            })
+    }
+
+    fn add_attachment(
+        &self,
+        id: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<AttachmentMeta, RepositoryError> {
+        let relative = Self::attachment_relative_path(id, name)?;
+        if self.get(id)?.is_none() {
+            return Err(RepositoryError::NotFound(id.to_string()));
+        }
+
+        let dir = self.attachment_dir(id);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to create attachment directory {}: {}",
+                dir.display(),
+                e
+            ))
+        })?;
+
+        let absolute = self.root.join(&relative);
+        std::fs::write(&absolute, data).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to write attachment {}: {}",
+                absolute.display(),
+                e
+            ))
+        })?;
+
+        let mut sidecar = self.read_entry_sidecar(id)?;
+        sidecar.attachments.retain(|meta| meta.name != name);
+        sidecar.attachments.push(AttachmentMeta {
+            name: name.to_string(),
+            bytes: data.len() as u64,
+        });
+        sidecar.attachments.sort_by(|a, b| a.name.cmp(&b.name));
+        self.write_entry_sidecar(id, &sidecar)?;
+
+        self.commit_paths(
+            &[relative, Self::entry_tags_relative_path(id)],
+            &format!("Add attachment {} to {}", name, id),
+        )?;
+
+        Ok(AttachmentMeta {
+            name: name.to_string(),
+            bytes: data.len() as u64,
+        })
+    }
+
+    fn remove_attachment(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<Vec<AttachmentMeta>, RepositoryError> {
+        let relative = Self::attachment_relative_path(id, name)?;
+        let mut sidecar = self.read_entry_sidecar(id)?;
+        if !sidecar.attachments.iter().any(|meta| meta.name == name) {
+            return Err(RepositoryError::NotFound(name.to_string()));
+        }
+
+        let absolute = self.root.join(&relative);
+        if absolute.exists() {
+            std::fs::remove_file(&absolute).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to remove attachment {}: {}",
+                    absolute.display(),
+                    e
+                ))
+            })?;
+        }
+
+        sidecar.attachments.retain(|meta| meta.name != name);
+        self.write_entry_sidecar(id, &sidecar)?;
+
+        let _ = std::fs::remove_dir(self.attachment_dir(id));
+
+        self.commit_staged(
+            &[Self::entry_tags_relative_path(id)],
+            &[relative],
+            &format!("Remove attachment {} from {}", name, id),
+        )?;
+
+        Ok(sidecar.attachments)
+    }
+}
+
+impl GitEntryRepository {
+    fn scan_attachment_dir(&self, id: &str) -> Result<Vec<AttachmentMeta>, RepositoryError> {
+        let dir = self.attachment_dir(id);
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut metas = Vec::new();
+        for file in std::fs::read_dir(&dir).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to scan attachment directory {}: {}",
+                dir.display(),
+                e
+            ))
+        })? {
+            let entry = file.map_err(|e| {
+                RepositoryError::Storage(format!("Failed to read directory entry: {}", e))
+            })?;
+            let meta = entry.metadata().map_err(|e| {
+                RepositoryError::Storage(format!("Failed to stat {}: {}", entry.path().display(), e))
+            })?;
+            if !meta.is_file() {
+                continue;
+            }
+            metas.push(AttachmentMeta {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                bytes: meta.len(),
+            });
+        }
+
+        metas.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(metas)
+    }
+
+    /// Stages the given repo-relative paths (adds first, removals after)
+    /// and commits them on HEAD.
+    fn commit_paths(&self, paths: &[PathBuf], message: &str) -> Result<(), RepositoryError> {
+        self.commit_staged(paths, &[], message)
+    }
+
+    fn commit_staged(
+        &self,
+        adds: &[PathBuf],
+        removals: &[PathBuf],
+        message: &str,
+    ) -> Result<(), RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+        let mut index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+
+        for path in adds {
+            index.add_path(path).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to add {} to index: {}", path.display(), e))
+            })?;
+        }
+        for path in removals {
+            let _ = index.remove_path(path);
+        }
+        index
+            .write()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+
+        let tree_oid = index
+            .write_tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+
+        let sig = self.create_signature()?;
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {}", e)))?;
+
+        Ok(())
     }
 }
 
@@ -1886,5 +2130,82 @@ mod tests {
 
         let synced = repo_a.get("202608241600").unwrap().unwrap();
         assert!(synced.body.contains("B version"));
+    }
+
+    #[test]
+    fn test_attachments_round_trip_and_delete_cleanup() {
+        use penna_core::ports::AttachmentStore;
+
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608241800".to_string()),
+                title: "With photo".to_string(),
+                body: "Body".to_string(),
+                tags: vec!["trip".to_string()],
+                created_at: "x".to_string(),
+                updated_at: "x".to_string(),
+            })
+            .unwrap();
+        repo_a.add_tag("daily").unwrap();
+
+        let png = vec![0x89u8, b'P', b'N', b'G', 0xFF, 0x00, 0xAB];
+        let meta = repo_a
+            .add_attachment("202608241800", "photo.png", &png)
+            .unwrap();
+        assert_eq!(meta.bytes, png.len() as u64);
+
+        let listed = repo_a.list_attachments("202608241800").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "photo.png");
+
+        let fetched = repo_a
+            .get_attachment("202608241800", "photo.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched, png);
+        assert!(repo_a.get_attachment("202608241800", "ghost.png").unwrap().is_none());
+
+        let entry = repo_a.get("202608241800").unwrap().unwrap();
+        assert_eq!(entry.tags, vec!["trip".to_string()]);
+        let catalog = repo_a.list_tags().unwrap();
+        assert!(catalog.contains(&"daily".to_string()));
+
+        let manifest = std::fs::read_to_string(
+            _tmp_a.path().join(".penna/202608241800.json"),
+        )
+        .unwrap();
+        assert!(manifest.contains("attachments"));
+        assert!(manifest.contains("photo.png"));
+
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+        let mirrored = repo_b
+            .get_attachment("202608241800", "photo.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(mirrored, png);
+
+        repo_a.remove_attachment("202608241800", "photo.png").unwrap();
+        assert!(repo_a.list_attachments("202608241800").unwrap().is_empty());
+        assert!(!repo_a.attachment_dir("202608241800").exists());
+
+        let meta2 = repo_a
+            .add_attachment("202608241800", "second.bin", &[9u8; 10])
+            .unwrap();
+        assert_eq!(meta2.bytes, 10);
+
+        repo_a.delete("202608241800").unwrap();
+        assert!(repo_a.get("202608241800").unwrap().is_none());
+        assert!(!repo_a.attachment_dir("202608241800").exists());
+        assert!(repo_a.list_attachments("202608241800").unwrap().is_empty());
     }
 }

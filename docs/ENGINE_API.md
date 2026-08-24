@@ -483,6 +483,44 @@ Output (malformed):
 }
 ```
 
+## Attachments (ADR 0012)
+
+Attachments live in a per-entry directory `journal-root/<id>/` next to
+`<id>.md`. Entries reference them with relative links
+(`![photo](202608241800/photo.png)`). The sidecar manifest
+`.penna/<id>.json` gains an optional additive field:
+
+```json
+{ "tags": ["trip"], "attachments": [{ "name": "photo.png", "bytes": 81234 }] }
+```
+
+Methods (all require an open session):
+
+### add_attachment
+
+Input: `{ session_id, entry_id, name, data (bytes) }`.
+Names must be plain file names (no separators, no traversal); payloads over
+32 MiB are rejected with code `VALIDATION`. The entry must already exist.
+Output: `{ "name": "photo.png", "bytes": 81234 }`.
+
+### list_attachments
+
+Input: `{ session_id, entry_id }`.
+Output: `{ "attachments": [{ "name": "...", "bytes": 0 }] }`.
+
+### get_attachment
+
+Input: `{ session_id, entry_id, name }`.
+Output: `{ "data": <bytes|null> }` — null when the attachment is absent.
+
+### remove_attachment
+
+Input: `{ session_id, entry_id, name }`.
+Output: remaining `{ "attachments": [...] }`.
+
+`delete_entry` removes the Markdown file, the `<id>/` directory, and
+refreshes the sidecar in one commit.
+
 ## Conflict Resolution (ADR 0006)
 
 When a sync report has status `diverged`, `conflicts` lists entry ids whose

@@ -1,16 +1,18 @@
 use chrono::{Duration, Local};
 use penna_adapters_git::{GitEntryRepository, GitJournalCloner};
 use penna_core::application::{
-    AddTagError, AddTagUseCase, CloneJournalUseCase, CreateEntryError, CreateEntryInput,
-    CreateEntryUseCase, DeleteEntryUseCase, GetEntryConflictUseCase, GetEntryUseCase,
-    ListEntriesUseCase, ListTagsUseCase, PullJournalUseCase, PushJournalUseCase,
-    ReconcileJournalUseCase, RemoveTagError, RemoveTagUseCase,
+    AddAttachmentError, AddAttachmentUseCase, AddTagError, AddTagUseCase,
+    CloneJournalUseCase, CreateEntryError, CreateEntryInput, CreateEntryUseCase,
+    DeleteEntryUseCase, GetAttachmentUseCase, GetEntryConflictUseCase, GetEntryUseCase,
+    ListAttachmentsUseCase, ListEntriesUseCase, ListTagsUseCase, PullJournalUseCase,
+    PushJournalUseCase, ReconcileJournalUseCase, RemoveAttachmentError,
+    RemoveAttachmentUseCase, RemoveTagError, RemoveTagUseCase,
     ResolveEntryConflictError, ResolveEntryConflictUseCase, ResolveJournalPathUseCase,
     SidecarIntegrityStatus, SidecarSource, SyncJournalUseCase, UpdateEntryError,
     UpdateEntryInput, UpdateEntryUseCase, UpdateTagError, UpdateTagUseCase,
     ValidateSidecarIntegrityUseCase,
 };
-use penna_core::domain::{Entry, EntryConflict, Sidecar};
+use penna_core::domain::{AttachmentMeta, Entry, EntryConflict, Sidecar};
 use penna_core::ports::{
     ConflictView, EntryRepository, RepositoryError, SyncResult,
 };
@@ -26,6 +28,7 @@ pub enum EngineError {
     NotConnected(String),
     Repo(RepositoryError),
     CredentialsRequired { remote_url: String },
+    Validation(String),
     Create(CreateEntryError),
     Update(UpdateEntryError),
     AddTag(AddTagError),
@@ -41,6 +44,33 @@ impl From<RepositoryError> for EngineError {
                 EngineError::CredentialsRequired { remote_url }
             }
             other => EngineError::Repo(other),
+        }
+    }
+}
+
+impl From<AddAttachmentError> for EngineError {
+    fn from(value: AddAttachmentError) -> Self {
+        match value {
+            AddAttachmentError::InvalidName(name) => {
+                EngineError::Validation(format!("invalid attachment name: {}", name))
+            }
+            AddAttachmentError::TooLarge { size, max } => EngineError::Validation(format!(
+                "attachment of {} bytes exceeds the {} byte limit",
+                size, max
+            )),
+            AddAttachmentError::NotFound(id) => EngineError::Repo(RepositoryError::NotFound(id)),
+            AddAttachmentError::Repository(err) => EngineError::from(err),
+        }
+    }
+}
+
+impl From<RemoveAttachmentError> for EngineError {
+    fn from(value: RemoveAttachmentError) -> Self {
+        match value {
+            RemoveAttachmentError::NotFound(name) => {
+                EngineError::Repo(RepositoryError::NotFound(name))
+            }
+            RemoveAttachmentError::Repository(err) => EngineError::from(err),
         }
     }
 }
@@ -69,6 +99,7 @@ impl EngineError {
             EngineError::NotConnected(_) => "NOT_CONNECTED",
             EngineError::Repo(_) => "REPO",
             EngineError::CredentialsRequired { .. } => "REPO",
+            EngineError::Validation(_) => "VALIDATION",
             EngineError::Create(CreateEntryError::Domain(_)) => "VALIDATION",
             EngineError::Create(CreateEntryError::Repository(_)) => "REPO",
             EngineError::Update(UpdateEntryError::Domain(_)) => "VALIDATION",
@@ -91,6 +122,7 @@ impl EngineError {
             EngineError::CredentialsRequired { remote_url } => {
                 format!("authentication required for remote {}", remote_url)
             }
+            EngineError::Validation(msg) => msg.clone(),
             EngineError::Create(err) => format!("{:?}", err),
             EngineError::Update(err) => format!("{:?}", err),
             EngineError::AddTag(err) => format!("{:?}", err),
@@ -521,6 +553,54 @@ impl PennaEngine {
             behind: None,
             conflicts: Vec::new(),
         })
+    }
+
+    pub fn add_attachment(
+        &self,
+        session_id: &str,
+        entry_id: &str,
+        name: &str,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = AddAttachmentUseCase::new(state.repo.clone());
+        use_case
+            .execute(entry_id, name, &data)
+            .map_err(EngineError::from)
+    }
+
+    pub fn get_attachment(
+        &self,
+        session_id: &str,
+        entry_id: &str,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = GetAttachmentUseCase::new(state.repo.clone());
+        use_case.execute(entry_id, name).map_err(EngineError::from)
+    }
+
+    pub fn list_attachments(
+        &self,
+        session_id: &str,
+        entry_id: &str,
+    ) -> Result<Vec<AttachmentMeta>, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = ListAttachmentsUseCase::new(state.repo.clone());
+        use_case.execute(entry_id).map_err(EngineError::from)
+    }
+
+    pub fn remove_attachment(
+        &self,
+        session_id: &str,
+        entry_id: &str,
+        name: &str,
+    ) -> Result<Vec<AttachmentMeta>, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = RemoveAttachmentUseCase::new(state.repo.clone());
+        use_case
+            .execute(entry_id, name)
+            .map_err(EngineError::from)
     }
 
     pub fn resolve_entry_conflict(

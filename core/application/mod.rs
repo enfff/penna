@@ -50,3 +50,12 @@ pub use sync_journal::SyncJournalUseCase;
 pub use validate_sidecar_integrity::{
     SidecarIntegrityStatus, SidecarSource, ValidateSidecarIntegrityUseCase,
 };
+
+pub mod add_attachment;
+pub mod attachment_access;
+
+pub use add_attachment::{AddAttachmentError, AddAttachmentUseCase, MAX_ATTACHMENT_BYTES};
+pub use attachment_access::{
+    GetAttachmentUseCase, ListAttachmentsUseCase, RemoveAttachmentError,
+    RemoveAttachmentUseCase,
+};
