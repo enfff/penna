@@ -141,6 +141,18 @@ fn converts_error_to_dto() {
 }
 
 #[test]
+fn credentials_required_maps_to_repo_code_with_remote_payload() {
+    let error = EngineError::CredentialsRequired {
+        remote_url: "https://github.com/u/journal.git".to_string(),
+    };
+
+    assert_eq!(error.code(), "REPO", "ADR 0009 set stays closed");
+    let dto = error.to_dto();
+    assert_eq!(dto.code, "REPO");
+    assert!(dto.message.contains("https://github.com/u/journal.git"));
+}
+
+#[test]
 fn stale_session_maps_to_not_connected_code() {
     let engine = PennaEngine::new();
     let error = engine

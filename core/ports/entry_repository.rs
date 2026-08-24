@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum RepositoryError {
     Storage(String),
     NotFound(String),
+    AuthRequired(String),
 }
 
 pub trait EntryRepository: Send + Sync {

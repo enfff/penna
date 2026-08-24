@@ -1,4 +1,5 @@
-use git2::{build::CheckoutBuilder, Repository, Signature};
+use git2::build::CheckoutBuilder;
+use git2::{Cred, CredentialType, RemoteCallbacks, Repository, Signature};
 use penna_core::domain::{Entry, EntryId};
 use penna_core::ports::{
     EntryRepository, JournalClone, JournalPath, JournalSync, RepositoryError, SyncResult,
@@ -9,6 +10,49 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::credentials::{
+    is_https_remote, lookup_keychain_token, resolve_credentials, ResolvedCredential,
+};
+
+fn needs_callbacks(resolved: &ResolvedCredential) -> bool {
+    matches!(
+        resolved,
+        ResolvedCredential::SshAgent | ResolvedCredential::Token(_)
+    )
+}
+
+fn remote_callbacks(resolved: &ResolvedCredential) -> RemoteCallbacks<'static> {
+    let token = match resolved {
+        ResolvedCredential::Token(token) => Some(token.clone()),
+        ResolvedCredential::SshAgent | ResolvedCredential::NoCredential => None,
+    };
+
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |url, username_from_url, allowed| {
+        if allowed.contains(CredentialType::SSH_KEY) {
+            let user = username_from_url.unwrap_or("git");
+            return Cred::ssh_key_from_agent(user).map_err(|e| git2::Error::new(
+                git2::ErrorCode::Auth,
+                git2::ErrorClass::Ssh,
+                format!("ssh-agent has no key for {}: {}", url, e),
+            ));
+        }
+
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Some(token) = &token {
+                return Cred::userpass_plaintext("x-oauth-basic", token);
+            }
+        }
+
+        Err(git2::Error::new(
+            git2::ErrorCode::Auth,
+            git2::ErrorClass::Http,
+            format!("no credential available for {}", url),
+        ))
+    });
+    callbacks
+}
 
 #[derive(Clone, Copy)]
 enum SyncMode {
@@ -490,6 +534,22 @@ impl GitEntryRepository {
             }
         };
 
+        let remote_url = remote
+            .url()
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
+
+        let env_token = std::env::var("PENNA_GIT_TOKEN")
+            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+            .ok();
+        let keychain_token = if is_https_remote(&remote_url) {
+            lookup_keychain_token(&remote_url)
+        } else {
+            None
+        };
+        let resolved =
+            resolve_credentials(&remote_url, env_token.as_deref(), keychain_token)?;
+
         let branch = match repo.head() {
             Ok(head) if head.is_branch() => head
                 .shorthand()
@@ -505,9 +565,19 @@ impl GitEntryRepository {
             .id();
 
         let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
+        let mut fetch_opts = git2::FetchOptions::new();
+        if needs_callbacks(&resolved) {
+            fetch_opts.remote_callbacks(remote_callbacks(&resolved));
+        }
         remote
-            .fetch(&[&fetch_refspec], None, None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to fetch remote: {}", e)))?;
+            .fetch(&[&fetch_refspec], Some(&mut fetch_opts), None)
+            .map_err(|e| {
+                if e.code() == git2::ErrorCode::Auth {
+                    RepositoryError::AuthRequired(remote_url.clone())
+                } else {
+                    RepositoryError::Storage(format!("Failed to fetch remote: {}", e))
+                }
+            })?;
 
         let remote_ref_name = format!("refs/remotes/origin/{}", branch);
         let remote_oid = match repo.find_reference(&remote_ref_name) {
@@ -520,9 +590,22 @@ impl GitEntryRepository {
                 }
 
                 let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-                remote.push(&[&push_refspec], None).map_err(|err| {
-                    RepositoryError::Storage(format!("Failed to push branch to remote: {}", err))
-                })?;
+                let mut push_opts = git2::PushOptions::new();
+                if needs_callbacks(&resolved) {
+                    push_opts.remote_callbacks(remote_callbacks(&resolved));
+                }
+                remote
+                    .push(&[&push_refspec], Some(&mut push_opts))
+                    .map_err(|err| {
+                        if err.code() == git2::ErrorCode::Auth {
+                            RepositoryError::AuthRequired(remote_url.clone())
+                        } else {
+                            RepositoryError::Storage(format!(
+                                "Failed to push branch to remote: {}",
+                                err
+                            ))
+                        }
+                    })?;
                 return Ok(SyncResult::Pushed { branch });
             }
             Err(e) => {
@@ -582,9 +665,19 @@ impl GitEntryRepository {
                 }
 
                 let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-                remote.push(&[&push_refspec], None).map_err(|e| {
-                    RepositoryError::Storage(format!("Failed to push local commits: {}", e))
-                })?;
+                let mut push_opts = git2::PushOptions::new();
+                if needs_callbacks(&resolved) {
+                    push_opts.remote_callbacks(remote_callbacks(&resolved));
+                }
+                remote
+                    .push(&[&push_refspec], Some(&mut push_opts))
+                    .map_err(|e| {
+                        if e.code() == git2::ErrorCode::Auth {
+                            RepositoryError::AuthRequired(remote_url.clone())
+                        } else {
+                            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                        }
+                    })?;
 
                 Ok(SyncResult::Pushed { branch })
             }
@@ -609,9 +702,19 @@ impl GitEntryRepository {
                 }
 
                 let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-                remote.push(&[&push_refspec], None).map_err(|e| {
-                    RepositoryError::Storage(format!("Failed to push local commits: {}", e))
-                })?;
+                let mut push_opts = git2::PushOptions::new();
+                if needs_callbacks(&resolved) {
+                    push_opts.remote_callbacks(remote_callbacks(&resolved));
+                }
+                remote
+                    .push(&[&push_refspec], Some(&mut push_opts))
+                    .map_err(|e| {
+                        if e.code() == git2::ErrorCode::Auth {
+                            RepositoryError::AuthRequired(remote_url.clone())
+                        } else {
+                            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                        }
+                    })?;
 
                 Ok(SyncResult::Pushed { branch })
             }

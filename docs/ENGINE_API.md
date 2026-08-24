@@ -483,6 +483,20 @@ Output (malformed):
 }
 ```
 
+## Authentication (ADR 0010)
+
+Sync methods resolve credentials automatically, in order:
+
+1. SSH remotes: the user's ssh-agent.
+2. HTTPS remotes: `PENNA_GIT_TOKEN` env var, then `GITHUB_TOKEN`, then the
+   OS keychain (service `penna`, user = remote URL).
+3. Local/file remotes need no credentials.
+
+When authentication is required but unavailable, sync fails with code
+`REPO` and a message naming the remote. Frontends prompt for the secret,
+may persist it to the keychain via the engine's credential store, then
+retry.
+
 ## Error Contract
 
 Engine returns typed errors internally. Bridge should map to consistent frontend shape:

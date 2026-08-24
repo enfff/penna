@@ -21,12 +21,24 @@ pub enum EngineError {
     Io(String),
     NotConnected(String),
     Repo(RepositoryError),
+    CredentialsRequired { remote_url: String },
     Create(CreateEntryError),
     Update(UpdateEntryError),
     AddTag(AddTagError),
     RemoveTag(RemoveTagError),
     UpdateTag(UpdateTagError),
     IdCollision(String),
+}
+
+impl From<RepositoryError> for EngineError {
+    fn from(value: RepositoryError) -> Self {
+        match value {
+            RepositoryError::AuthRequired(remote_url) => {
+                EngineError::CredentialsRequired { remote_url }
+            }
+            other => EngineError::Repo(other),
+        }
+    }
 }
 
 /// Stable public error codes (ADR 0009). This set is closed: adding a code
@@ -52,6 +64,7 @@ impl EngineError {
             EngineError::Io(_) => "IO",
             EngineError::NotConnected(_) => "NOT_CONNECTED",
             EngineError::Repo(_) => "REPO",
+            EngineError::CredentialsRequired { .. } => "REPO",
             EngineError::Create(CreateEntryError::Domain(_)) => "VALIDATION",
             EngineError::Create(CreateEntryError::Repository(_)) => "REPO",
             EngineError::Update(UpdateEntryError::Domain(_)) => "VALIDATION",
@@ -71,6 +84,9 @@ impl EngineError {
             EngineError::Io(msg) => msg.clone(),
             EngineError::NotConnected(msg) => msg.clone(),
             EngineError::Repo(err) => format!("{:?}", err),
+            EngineError::CredentialsRequired { remote_url } => {
+                format!("authentication required for remote {}", remote_url)
+            }
             EngineError::Create(err) => format!("{:?}", err),
             EngineError::Update(err) => format!("{:?}", err),
             EngineError::AddTag(err) => format!("{:?}", err),
@@ -289,7 +305,7 @@ impl PennaEngine {
         fs::create_dir_all(&repo_path)
             .map_err(|e| EngineError::Io(format!("failed to create repo directory: {}", e)))?;
 
-        let repo = GitEntryRepository::new(repo_path.clone()).map_err(EngineError::Repo)?;
+        let repo = GitEntryRepository::new(repo_path.clone()).map_err(EngineError::from)?;
         self.register_session(repo_path, repo)
     }
 
@@ -302,9 +318,9 @@ impl PennaEngine {
         let use_case = CloneJournalUseCase::new(GitJournalCloner);
         use_case
             .execute(&request.remote_url, repo_path.clone())
-            .map_err(EngineError::Repo)?;
+            .map_err(EngineError::from)?;
 
-        let repo = GitEntryRepository::new(repo_path.clone()).map_err(EngineError::Repo)?;
+        let repo = GitEntryRepository::new(repo_path.clone()).map_err(EngineError::from)?;
         self.register_session(repo_path, repo)
     }
 
@@ -314,7 +330,7 @@ impl PennaEngine {
     ) -> Result<ResolveJournalPathResponse, EngineError> {
         let state = self.session(session_id)?;
         let use_case = ResolveJournalPathUseCase::new(state.repo.clone());
-        let repo_path = use_case.execute().map_err(EngineError::Repo)?;
+        let repo_path = use_case.execute().map_err(EngineError::from)?;
 
         Ok(ResolveJournalPathResponse {
             repo_path: repo_path.to_string_lossy().to_string(),
@@ -324,14 +340,14 @@ impl PennaEngine {
     pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
         let state = self.session(session_id)?;
         let use_case = PullJournalUseCase::new(state.repo.clone());
-        let result = use_case.execute().map_err(EngineError::Repo)?;
+        let result = use_case.execute().map_err(EngineError::from)?;
         Ok(result.into())
     }
 
     pub fn push_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
         let state = self.session(session_id)?;
         let use_case = PushJournalUseCase::new(state.repo.clone());
-        let result = use_case.execute().map_err(EngineError::Repo)?;
+        let result = use_case.execute().map_err(EngineError::from)?;
         Ok(result.into())
     }
 
@@ -369,7 +385,7 @@ impl PennaEngine {
 
     pub fn journal_status(&self, session_id: &str) -> Result<JournalStatus, EngineError> {
         let state = self.session(session_id)?;
-        let status = state.repo.status().map_err(EngineError::Repo)?;
+        let status = state.repo.status().map_err(EngineError::from)?;
 
         Ok(JournalStatus {
             session_id: session_id.to_string(),
@@ -384,13 +400,13 @@ impl PennaEngine {
     pub fn list_entries(&self, session_id: &str) -> Result<Vec<Entry>, EngineError> {
         let state = self.session(session_id)?;
         let use_case = ListEntriesUseCase::new(state.repo.clone());
-        use_case.execute().map_err(EngineError::Repo)
+        use_case.execute().map_err(EngineError::from)
     }
 
     pub fn get_entry(&self, session_id: &str, id: &str) -> Result<Option<Entry>, EngineError> {
         let state = self.session(session_id)?;
         let use_case = GetEntryUseCase::new(state.repo.clone());
-        use_case.execute(id).map_err(EngineError::Repo)
+        use_case.execute(id).map_err(EngineError::from)
     }
 
     pub fn create_entry(&self, session_id: &str, request: CreateEntryRequest) -> Result<Entry, EngineError> {
@@ -428,7 +444,7 @@ impl PennaEngine {
         let existing = state
             .repo
             .get(&request.id)
-            .map_err(EngineError::Repo)?
+            .map_err(EngineError::from)?
             .ok_or_else(|| EngineError::Repo(RepositoryError::NotFound(request.id.clone())))?;
 
         let use_case = UpdateEntryUseCase::new(state.repo.clone());
@@ -447,20 +463,20 @@ impl PennaEngine {
     pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError> {
         let state = self.session(session_id)?;
         let use_case = DeleteEntryUseCase::new(state.repo.clone());
-        use_case.execute(id).map_err(EngineError::Repo)
+        use_case.execute(id).map_err(EngineError::from)
     }
 
     pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
         let state = self.session(session_id)?;
         let use_case = SyncJournalUseCase::new(state.repo.clone());
-        let result = use_case.execute().map_err(EngineError::Repo)?;
+        let result = use_case.execute().map_err(EngineError::from)?;
         Ok(result.into())
     }
 
     pub fn list_tags(&self, session_id: &str) -> Result<Vec<String>, EngineError> {
         let state = self.session(session_id)?;
         let use_case = ListTagsUseCase::new(state.repo.clone());
-        use_case.execute().map_err(EngineError::Repo)
+        use_case.execute().map_err(EngineError::from)
     }
 
     pub fn add_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError> {
@@ -523,7 +539,7 @@ impl PennaEngine {
         let mut candidate = Local::now();
         for _ in 0..(24 * 60) {
             let id = candidate.format("%Y%m%d%H%M").to_string();
-            if repo.get(&id).map_err(EngineError::Repo)?.is_none() {
+            if repo.get(&id).map_err(EngineError::from)?.is_none() {
                 return Ok(id);
             }
             candidate += Duration::minutes(1);
