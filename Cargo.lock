@@ -449,6 +449,7 @@ dependencies = [
 name = "penna-adapters-git"
 version = "0.1.1"
 dependencies = [
+ "chrono",
  "git2",
  "penna-core",
  "serde",

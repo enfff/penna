@@ -161,6 +161,95 @@ impl GitEntryRepository {
             .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {}", e)))
     }
 
+    fn format_git_time(time: git2::Time) -> String {
+        chrono::DateTime::from_timestamp(time.seconds(), 0)
+            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
+            .unwrap_or_default()
+    }
+
+    fn commit_touches_path(
+        commit: &git2::Commit<'_>,
+        path: &Path,
+    ) -> Result<bool, RepositoryError> {
+        let current_blob = commit
+            .tree()
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .map(|entry| entry.id());
+
+        let parent_blob = match commit.parent_count() {
+            0 => None,
+            _ => match commit.parent(0) {
+                Ok(parent) => parent
+                    .tree()
+                    .ok()
+                    .and_then(|tree| tree.get_path(path).ok())
+                    .map(|entry| entry.id()),
+                Err(e) => {
+                    return Err(RepositoryError::Storage(format!(
+                        "Failed to get parent commit: {}",
+                        e
+                    )))
+                }
+            },
+        };
+
+        Ok(current_blob != parent_blob)
+    }
+
+    /// Derives durable entry timestamps from git history (ADR 0007):
+    /// created_at is the author date of the earliest commit touching
+    /// `<id>.md`, updated_at of the latest. Returns None when no history
+    /// exists for the entry.
+    fn entry_history_timestamps(
+        &self,
+        id: &str,
+    ) -> Result<Option<(String, String)>, RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+
+        if repo.head().is_err() {
+            return Ok(None);
+        }
+
+        let entry_path = self.entry_path(id);
+        let mut revwalk = repo
+            .revwalk()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {}", e)))?;
+        revwalk
+            .set_sorting(git2::Sort::TIME | git2::Sort::REVERSE)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {}", e)))?;
+        revwalk
+            .push_head()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {}", e)))?;
+
+        let mut created_at: Option<git2::Time> = None;
+        let mut updated_at: Option<git2::Time> = None;
+
+        for oid in revwalk {
+            let oid = oid.map_err(|e| {
+                RepositoryError::Storage(format!("Failed to read history entry: {}", e))
+            })?;
+            let commit = repo.find_commit(oid).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to find commit in history: {}", e))
+            })?;
+
+            if Self::commit_touches_path(&commit, &entry_path)? {
+                if created_at.is_none() {
+                    created_at = Some(commit.time());
+                }
+                updated_at = Some(commit.time());
+            }
+        }
+
+        Ok(match (created_at, updated_at) {
+            (Some(created), Some(updated)) => Some((
+                Self::format_git_time(created),
+                Self::format_git_time(updated),
+            )),
+            _ => None,
+        })
+    }
+
     fn parse_entry_content(id: &str, content: &str) -> Result<Entry, RepositoryError> {
         let timestamps = None;
         let lines: Vec<&str> = content.lines().collect();
@@ -621,6 +710,10 @@ impl EntryRepository for GitEntryRepository {
             Some(content) => {
                 let mut entry = Self::parse_entry_content(id, &content)?;
                 entry.tags = self.read_entry_tags_from_disk(id)?;
+                if let Some((created_at, updated_at)) = self.entry_history_timestamps(id)? {
+                    entry.created_at = created_at;
+                    entry.updated_at = updated_at;
+                }
                 Ok(Some(entry))
             }
             None => Ok(None),
@@ -939,6 +1032,79 @@ mod tests {
         assert_eq!(parsed.id.0, "legacy-id");
         assert_eq!(parsed.title, "Legacy Title");
         assert_eq!(parsed.body, "Legacy body");
+    }
+
+    #[test]
+    fn test_get_derives_timestamps_from_git_history() {
+        let (_tmp_dir, repo) = create_test_repo();
+
+        repo.save(&Entry {
+            id: EntryId("202608241200".to_string()),
+            title: "First".to_string(),
+            body: "Original body".to_string(),
+            tags: vec![],
+            created_at: "unused".to_string(),
+            updated_at: "unused".to_string(),
+        })
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let mut updated_entry = repo.get("202608241200").unwrap().unwrap();
+        updated_entry.body = "Rewritten body".to_string();
+        repo.save(&updated_entry).unwrap();
+
+        let loaded = repo.get("202608241200").unwrap().unwrap();
+
+        assert_eq!(loaded.title, "First");
+        assert_eq!(loaded.body, "Rewritten body");
+
+        for stamp in [&loaded.created_at, &loaded.updated_at] {
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(stamp).is_ok(),
+                "timestamp {} is not RFC3339",
+                stamp
+            );
+        }
+
+        assert_ne!(
+            loaded.created_at, loaded.updated_at,
+            "update commit must move updated_at past created_at"
+        );
+        assert!(loaded.created_at < loaded.updated_at);
+    }
+
+    #[test]
+    fn test_timestamps_survive_clone_to_another_machine() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608241300".to_string()),
+                title: "Traveler".to_string(),
+                body: "Body".to_string(),
+                tags: vec![],
+                created_at: "ignored".to_string(),
+                updated_at: "ignored".to_string(),
+            })
+            .unwrap();
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+
+        let source = repo_a.get("202608241300").unwrap().unwrap();
+        let mirrored = repo_b.get("202608241300").unwrap().unwrap();
+
+        assert_eq!(source.created_at, mirrored.created_at);
+        assert_eq!(source.updated_at, mirrored.updated_at);
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&mirrored.created_at).is_ok(),
+            "cloned entry must carry history-derived timestamp"
+        );
     }
 
     #[test]

@@ -69,7 +69,9 @@ Persistence rules:
 2. `title` persists via the first heading in the Markdown body.
 3. `body` persists as Markdown text.
 4. `tags` planned durable storage in `.penna/<id>.json` as JSON array.
-5. `created_at` and `updated_at` are not durably stored in markdown file format yet.
+5. `created_at` and `updated_at` derive from git history per ADR 0007:
+   author dates of the earliest and latest commits touching `<id>.md`.
+   Nothing extra is persisted; values survive clone and `.penna/` deletion.
 
 Sidecar JSON v1 (minimal):
 
