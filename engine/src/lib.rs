@@ -153,6 +153,10 @@ pub struct JournalStatus {
     pub branch: Option<String>,
     pub head_commit: Option<String>,
     pub is_dirty: bool,
+    /// True while MERGE_HEAD exists (ADR 0014).
+    pub merge_in_progress: bool,
+    /// Index-conflicted paths mid-merge; empty otherwise.
+    pub conflicted_paths: Vec<String>,
     pub connected_at: String,
 }
 
@@ -450,6 +454,8 @@ impl PennaEngine {
             branch: status.branch,
             head_commit: status.head_commit,
             is_dirty: status.is_dirty,
+            merge_in_progress: status.merge_in_progress,
+            conflicted_paths: status.conflicted_paths,
             connected_at: state.connected_at,
         })
     }

@@ -13,3 +13,4 @@
 - [0011 - Cursor-Based Summary Listing](./0011-cursor-based-summary-listing.md) (Rejected — full-list `list_entries` stands)
 - [0012 - Attachments As Per-Entry Directories](./0012-attachments-as-per-entry-directories.md)
 - [0013 - GTK4 With Libadwaita For The GUI Frontend](./0013-gtk4-libadwaita-for-gui-frontend.md)
+- [0014 - Marker-Based Conflict State](./0014-marker-based-conflict-state.md) (supersedes 0006 mechanics)

@@ -521,58 +521,41 @@ Output: remaining `{ "attachments": [...] }`.
 `delete_entry` removes the Markdown file, the `<id>/` directory, and
 refreshes the sidecar in one commit.
 
-## Conflict Resolution (ADR 0006)
+## Conflict Resolution (ADR 0014)
 
-When a sync report has status `diverged`, `conflicts` lists entry ids whose
-bodies changed differently on both machines. The frontend merge-editor flow:
+Divergence reconciles via a standard git **merge** (never rebase).
+Conflicted entries carry plain `<<<<<<< / ======= / >>>>>>>` markers in
+working files (`merge.conflictStyle = merge` is pinned per repository).
 
-1. `get_entry_conflict` returns the three raw Markdown versions for the
-   editor (base = common ancestor, ours = local, theirs = remote).
+Flow:
 
-Input:
+1. `sync_journal` / `pull_journal` start the merge automatically when
+   diverged, then report `{ "status": "diverged", ..., "conflicts": [ids] }`.
+   Marker-less conflicts are resolved by policy at merge start: tag
+   sidecars union-merge silently, modified-side-wins resurrects deleted
+   files, both-deleted drops them.
+2. Reads (`get_entry`, `list_entries`) always return working-tree content,
+   so markers surface immediately.
+3. The frontend renders its merge editor from the marked text (or asks
+   `get_entry_conflict` for structured base/ours/theirs served from index
+   stages).
+4. Resolution writes clean text through the normal entry update path;
+   while the merge is open, saves stage without committing.
+5. After the last conflict is resolved, the next `sync_journal`
+   auto-concludes: it commits with parents `[HEAD, MERGE_HEAD]`, clears
+   `MERGE_HEAD`, and returns `pulled`. Pushing afterwards fast-forwards
+   the remote.
 
-```json
-{ "session_id": "session-...", "id": "202608241500" }
-```
-
-Output (null when the entry is not conflicted):
+`journal_status` grows two fields so detection never scans prose:
 
 ```json
 {
-  "conflict": {
-    "entry_id": "202608241500",
-    "base": "# Title\n\nancestor text",
-    "ours": "# Title\n\nlocal text",
-    "theirs": "# Title\n\nremote text"
-  }
+  "merge_in_progress": true,
+  "conflicted_paths": ["202608250800.md"]
 }
 ```
 
-2. The user edits in-app; quick presets ("keep ours"/"keep theirs") are
-   frontend shortcuts producing the same resolved text.
-3. `resolve_entry_conflict` writes the user's body as a normal update
-   commit; title, tags, and created_at stay from the local side.
-
-Input:
-
-```json
-{ "session_id": "session-...", "id": "202608241500", "resolved_body": "# Title\n\nmerged text" }
-```
-
-4. After all entries are resolved, `reconcile_journal` creates the merge
-   commit: conflicted bodies keep the resolved local text, clean changes
-   from both sides auto-merge, and tag sidecars merge by set union.
-
-Output:
-
-```json
-{ "status": "reconciled", "branch": "master", "ahead": null, "behind": null, "conflicts": [] }
-```
-
-5. Push as usual afterwards; the remote fast-forwards to the reconciled
-   history.
-
-Pushing while still diverged is refused (`diverged` status) so remote work
+Pushing while still diverged or mid-merge reports `diverged`; remote work
 is never overwritten silently.
 
 ## Authentication (ADR 0010)

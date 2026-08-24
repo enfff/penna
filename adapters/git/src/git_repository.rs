@@ -85,6 +85,8 @@ pub struct RepositoryStatus {
     pub branch: Option<String>,
     pub head_commit: Option<String>,
     pub is_dirty: bool,
+    pub merge_in_progress: bool,
+    pub conflicted_paths: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -151,10 +153,26 @@ impl GitEntryRepository {
             .map_err(|e| RepositoryError::Storage(format!("Failed to get repo status: {}", e)))?
             .is_empty();
 
+        let merge_in_progress = repo.find_reference("MERGE_HEAD").is_ok();
+
+        let conflicted_paths = if merge_in_progress {
+            let index = repo
+                .index()
+                .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+            conflicted_paths_of(&index)
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Ok(RepositoryStatus {
             branch,
             head_commit,
             is_dirty,
+            merge_in_progress,
+            conflicted_paths,
         })
     }
 
@@ -176,36 +194,6 @@ impl GitEntryRepository {
         }
     }
 
-    fn read_file_from_commit(
-        &self,
-        commit_oid: git2::Oid,
-        path: &std::path::Path,
-    ) -> Result<Option<String>, RepositoryError> {
-        let repo = self.repo.lock().unwrap();
-        
-        let commit = repo.find_commit(commit_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
-        
-        let tree = commit.tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
-
-        match tree.get_path(path) {
-            Ok(entry) => {
-                let object = entry.to_object(&repo)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get tree object: {}", e)))?;
-                
-                let blob = object.into_blob()
-                    .map_err(|_| RepositoryError::Storage("Not a blob".to_string()))?;
-                
-                let content = String::from_utf8(blob.content().to_vec())
-                    .map_err(|e| RepositoryError::Storage(format!("Invalid UTF-8: {}", e)))?;
-                
-                Ok(Some(content))
-            }
-            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(e) => Err(RepositoryError::Storage(format!("Failed to get file: {}", e))),
-        }
-    }
 
     fn create_signature(&self) -> Result<Signature<'static>, RepositoryError> {
         Signature::now("Penna", "penna@example.com")
@@ -470,6 +458,29 @@ impl GitEntryRepository {
         self.write_entry_sidecar(id, &sidecar)
     }
 
+    fn list_entry_ids_from_worktree(&self) -> Result<Vec<String>, RepositoryError> {
+        let mut ids = Vec::new();
+        let entries = std::fs::read_dir(&self.root).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to scan journal directory {}: {}",
+                self.root.display(),
+                e
+            ))
+        })?;
+        for entry in entries {
+            let path = entry.map_err(|e| {
+                RepositoryError::Storage(format!("Failed to read directory entry: {}", e))
+            })?;
+            let name = path.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = name.strip_suffix(".md") {
+                if path.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+        Ok(ids)
+    }
+
     fn list_entry_ids_from_head(&self) -> Result<Vec<String>, RepositoryError> {
         let mut entry_ids: Vec<String> = Vec::new();
 
@@ -659,11 +670,28 @@ impl GitEntryRepository {
         }
 
         if ahead > 0 && behind > 0 {
-            return Ok(SyncResult::Diverged {
-                branch,
-                ahead,
-                behind,
-            });
+            match mode {
+                SyncMode::PushOnly => {
+                    return Ok(SyncResult::Diverged {
+                        branch,
+                        ahead,
+                        behind,
+                    });
+                }
+                SyncMode::Smart | SyncMode::PullOnly => {
+                    // ADR 0014: merge (never rebase), apply marker-less
+                    // policies, then conclude when nothing is conflicted.
+                    self.begin_merge_locked(&repo)?;
+                    self.apply_merge_policies_locked(&repo)?;
+                    return match conclude_merge_locked(&repo)? {
+                        MergeConclusion::Concluded => Ok(SyncResult::Pulled { branch }),
+                        MergeConclusion::StillConflicted(_) => {
+                            Ok(SyncResult::Diverged { branch, ahead, behind })
+                        }
+                        MergeConclusion::NotMerging => Ok(SyncResult::UpToDate { branch }),
+                    };
+                }
+            }
         }
 
         match mode {
@@ -833,28 +861,30 @@ impl TagCatalog for GitEntryRepository {
 }
 
 impl EntryRepository for GitEntryRepository {
+    /// Reads the entry from the working tree (ADR 0014): external edits and
+    /// conflict markers must surface immediately. Timestamps still derive
+    /// from git history.
     fn get(&self, id: &str) -> Result<Option<Entry>, RepositoryError> {
-        let entry_path = self.entry_path(id);
-        
-        let commit_oid = match self.get_head_oid()? {
-            Some(oid) => oid,
-            None => return Ok(None),
-        };
-
-        let content = self.read_file_from_commit(commit_oid, &entry_path)?;
-        
-        match content {
-            Some(content) => {
-                let mut entry = Self::parse_entry_content(id, &content)?;
-                entry.tags = self.read_entry_tags_from_disk(id)?;
-                if let Some((created_at, updated_at)) = self.entry_history_timestamps(id)? {
-                    entry.created_at = created_at;
-                    entry.updated_at = updated_at;
-                }
-                Ok(Some(entry))
-            }
-            None => Ok(None),
+        let absolute = self.root.join(self.entry_path(id));
+        if !absolute.exists() {
+            return Ok(None);
         }
+
+        let content = std::fs::read_to_string(&absolute).map_err(|e| {
+            RepositoryError::Storage(format!(
+                "Failed to read entry file {}: {}",
+                absolute.display(),
+                e
+            ))
+        })?;
+
+        let mut entry = Self::parse_entry_content(id, &content)?;
+        entry.tags = self.read_entry_tags_from_disk(id)?;
+        if let Some((created_at, updated_at)) = self.entry_history_timestamps(id)? {
+            entry.created_at = created_at;
+            entry.updated_at = updated_at;
+        }
+        Ok(Some(entry))
     }
 
     fn save(&self, entry: &Entry) -> Result<(), RepositoryError> {
@@ -887,6 +917,12 @@ impl EntryRepository for GitEntryRepository {
         index
             .write()
             .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+
+        if merge_head_oid(&repo)?.is_some() {
+            // Mid-merge (ADR 0014): staging registers the resolution; the
+            // conclude step creates the two-parent commit.
+            return Ok(());
+        }
 
         let tree_oid = index
             .write_tree()
@@ -975,6 +1011,11 @@ impl EntryRepository for GitEntryRepository {
             .write()
             .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
 
+        if merge_head_oid(&repo)?.is_some() {
+            // Mid-merge (ADR 0014): stage the deletion, conclude later.
+            return Ok(());
+        }
+
         let tree_oid = index
             .write_tree()
             .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
@@ -999,31 +1040,10 @@ impl EntryRepository for GitEntryRepository {
     }
 
     fn list(&self) -> Result<Vec<Entry>, RepositoryError> {
-        let mut entry_ids: Vec<String> = Vec::new();
+        let mut entry_ids = self.list_entry_ids_from_worktree()?;
 
-        let commit_oid = match self.get_head_oid()? {
-            Some(oid) => oid,
-            None => return Ok(vec![]),
-        };
-
-        {
-            let repo = self.repo.lock().unwrap();
-            
-            let commit = repo.find_commit(commit_oid)
-                .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
-            
-            let tree = commit.tree()
-                .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
-
-            for entry in tree.iter() {
-                if entry.filemode() == git2::FileMode::Blob as i32 || entry.filemode() == 33188 {
-                    let path_str = entry.name().unwrap_or("");
-                    if path_str.ends_with(".md") {
-                        let id = path_str[..path_str.len() - 3].to_string();
-                        entry_ids.push(id);
-                    }
-                }
-            }
+        if entry_ids.is_empty() {
+            entry_ids = self.list_entry_ids_from_head()?;
         }
 
         let mut entries = Vec::new();
@@ -1249,34 +1269,19 @@ impl JournalSync for GitEntryRepository {
     }
 }
 
-fn read_blob_text(
-    repo: &git2::Repository,
-    commit: &git2::Commit<'_>,
-    path: &Path,
-) -> Option<String> {
-    let entry = commit.tree().ok()?.get_path(path).ok()?;
-    let object = entry.to_object(repo).ok()?;
-    let blob = object.into_blob().ok()?;
-    String::from_utf8(blob.content().to_vec()).ok()
-}
 
 impl ConflictView for GitEntryRepository {
+    /// Conflicted entry ids straight from the on-disk index (ADR 0014).
     fn list_conflicted_ids(&self) -> Result<Vec<String>, RepositoryError> {
-        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
-            return Ok(Vec::new());
-        };
-
         let repo = self.repo.lock().unwrap();
-        let ours = repo.find_commit(ours_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
-        })?;
-        let theirs = repo.find_commit(theirs_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
-        })?;
-
-        let merge_index = self.merge_index_for(&repo, &ours, &theirs)?;
+        let index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+        if !index.has_conflicts() {
+            return Ok(Vec::new());
+        }
         let mut ids = Vec::new();
-        for path in conflicted_paths_of(&merge_index) {
+        for path in conflicted_paths_of(&index) {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if let Some(stem) = name.strip_suffix(".md") {
                     ids.push(stem.to_string());
@@ -1287,41 +1292,24 @@ impl ConflictView for GitEntryRepository {
         Ok(ids)
     }
 
+    /// Structured three-way view served from index stages mid-merge.
     fn entry_conflict(&self, id: &str) -> Result<Option<EntryConflict>, RepositoryError> {
-        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
-            return Ok(None);
-        };
-
         let repo = self.repo.lock().unwrap();
-        let ours_commit = repo.find_commit(ours_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
-        })?;
-        let theirs_commit = repo.find_commit(theirs_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
-        })?;
-        let base_oid = repo
-            .merge_base(ours_oid, theirs_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find merge base: {}", e)))?;
-        let base_commit = repo.find_commit(base_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find merge base commit: {}", e))
-        })?;
-
-        let entry_path = self.entry_path(id);
-        let (base, ours, theirs) = (
-            read_blob_text(&repo, &base_commit, &entry_path),
-            read_blob_text(&repo, &ours_commit, &entry_path),
-            read_blob_text(&repo, &theirs_commit, &entry_path),
-        );
-
-        let (Some(base), Some(ours), Some(theirs)) = (base, ours, theirs) else {
-            return Ok(None);
-        };
-
-        let both_modified_differently = ours != theirs && ours != base && theirs != base;
-        if !both_modified_differently {
+        let index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+        if !index.has_conflicts() {
             return Ok(None);
         }
-
+        let path = self.entry_path(id);
+        let stage = |s: i32| -> Option<String> {
+            let entry = index.get_path(&path, s)?;
+            let blob = repo.find_blob(entry.id).ok()?;
+            String::from_utf8(blob.content().to_vec()).ok()
+        };
+        let (Some(base), Some(ours), Some(theirs)) = (stage(1), stage(2), stage(3)) else {
+            return Ok(None);
+        };
         Ok(Some(EntryConflict {
             entry_id: id.to_string(),
             base,
@@ -1330,69 +1318,169 @@ impl ConflictView for GitEntryRepository {
         }))
     }
 
+    /// Concludes the pending merge when no conflicts remain (ADR 0014).
     fn reconcile_with_remote(&self) -> Result<(), RepositoryError> {
-        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
-            return Ok(());
-        };
-
         let repo = self.repo.lock().unwrap();
-        let ours = repo.find_commit(ours_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
+        match conclude_merge_locked(&repo)? {
+            MergeConclusion::Concluded | MergeConclusion::NotMerging => Ok(()),
+            MergeConclusion::StillConflicted(paths) => Err(RepositoryError::Storage(format!(
+                "unresolved conflicts remain: {}",
+                paths.join(", ")
+            ))),
+        }
+    }
+}
+
+pub(crate) enum MergeConclusion {
+    NotMerging,
+    StillConflicted(Vec<String>),
+    Concluded,
+}
+
+fn merge_head_oid(repo: &git2::Repository) -> Result<Option<git2::Oid>, RepositoryError> {
+    match repo.find_reference("MERGE_HEAD") {
+        Ok(reference) => reference.target().map(Some).ok_or_else(|| {
+            RepositoryError::Storage("MERGE_HEAD has no target".to_string())
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+fn conclude_merge_locked(
+    repo: &git2::Repository,
+) -> Result<MergeConclusion, RepositoryError> {
+    if merge_head_oid(repo)?.is_none() {
+        return Ok(MergeConclusion::NotMerging);
+    }
+
+    let mut index = repo
+        .index()
+        .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+    if index.has_conflicts() {
+        return Ok(MergeConclusion::StillConflicted(
+            conflicted_paths_of(&index)
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        ));
+    }
+
+    let tree_oid = index
+        .write_tree_to(repo)
+        .map_err(|e| RepositoryError::Storage(format!("Failed to write merge tree: {}", e)))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| RepositoryError::Storage(format!("Failed to find merge tree: {}", e)))?;
+
+    let branch = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().map(ToOwned::to_owned))
+        .ok_or_else(|| RepositoryError::Storage("failed to resolve branch".to_string()))?;
+    let ours = repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?;
+    let merge_head_oid = merge_head_oid(repo)?.expect("checked above");
+    let merge_head = repo.find_commit(merge_head_oid).map_err(|e| {
+        RepositoryError::Storage(format!("Failed to find MERGE_HEAD commit: {}", e))
+    })?;
+
+    let sig = Signature::now("Penna", "penna@example.com")
+        .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {}", e)))?;
+
+    repo.commit(
+        Some(&format!("refs/heads/{}", branch)),
+        &sig,
+        &sig,
+        "Reconcile journal divergence",
+        &tree,
+        &[&ours, &merge_head],
+    )
+    .map_err(|e| RepositoryError::Storage(format!("Failed to commit merge: {}", e)))?;
+
+    if let Ok(mut merge_head_ref) = repo.find_reference("MERGE_HEAD") {
+        let _ = merge_head_ref.delete();
+    }
+    if let Ok(mut merge_msg_ref) = repo.find_reference("MERGE_MSG") {
+        let _ = merge_msg_ref.delete();
+    }
+
+    repo.checkout_head(Some(CheckoutBuilder::new().force()))
+        .map_err(|e| {
+            RepositoryError::Storage(format!("Failed to refresh working tree: {}", e))
         })?;
-        let theirs = repo.find_commit(theirs_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
-        })?;
 
-        let merge_index = self.merge_index_for(&repo, &ours, &theirs)?;
-        let branch = match repo.head().ok().and_then(|h| h.shorthand().map(ToOwned::to_owned)) {
-            Some(branch) => branch,
-            None => return Ok(()),
-        };
+    Ok(MergeConclusion::Concluded)
+}
 
-        let base_oid = repo
-            .merge_base(ours_oid, theirs_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find merge base: {}", e)))?;
-        let base = repo.find_commit(base_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find merge base commit: {}", e))
-        })?;
+impl GitEntryRepository {
+    /// Starts a real git merge against the fetched remote branch (ADR 0014).
+    /// No-op when a merge is already in progress. Pins the marker style.
+    fn begin_merge_locked(&self, repo: &git2::Repository) -> Result<(), RepositoryError> {
+        if merge_head_oid(repo)?.is_some() {
+            return Ok(());
+        }
 
-        let conflicted = conflicted_paths_of(&merge_index);
-        drop(merge_index);
+        let mut config = repo
+            .config()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read config: {}", e)))?;
+        config
+            .set_str("merge.conflictStyle", "merge")
+            .map_err(|e| RepositoryError::Storage(format!("Failed to pin conflict style: {}", e)))?;
 
-        let base_tree = base.tree().map_err(|e| {
-            RepositoryError::Storage(format!("Failed to get merge base tree: {}", e))
-        })?;
-        let ours_tree = ours.tree().map_err(|e| {
-            RepositoryError::Storage(format!("Failed to get local tree: {}", e))
-        })?;
-        let theirs_tree = theirs.tree().map_err(|e| {
-            RepositoryError::Storage(format!("Failed to get remote tree: {}", e))
-        })?;
+        let branch = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(ToOwned::to_owned))
+            .ok_or_else(|| RepositoryError::Storage("failed to resolve branch".to_string()))?;
+        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_ref = repo
+            .find_reference(&remote_ref_name)
+            .map_err(|e| {
+                RepositoryError::Storage(format!("Failed to find remote branch: {}", e))
+            })?;
+        let annotated = repo
+            .reference_to_annotated_commit(&remote_ref)
+            .map_err(|e| {
+                RepositoryError::Storage(format!("Failed to resolve remote commit: {}", e))
+            })?;
 
-        let mut builder = repo.treebuilder(Some(&ours_tree)).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to open tree builder: {}", e))
-        })?;
+        let mut merge_opts = git2::MergeOptions::new();
+        let mut checkout = CheckoutBuilder::new();
+        checkout.allow_conflicts(true);
+        repo.merge(&[&annotated], Some(&mut merge_opts), Some(&mut checkout))
+            .map_err(|e| RepositoryError::Storage(format!("Failed to merge remote: {}", e)))?;
 
-        let diff = repo
-            .diff_tree_to_tree(Some(&base_tree), Some(&theirs_tree), None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to diff remote changes: {}", e)))?;
+        Ok(())
+    }
 
-        for delta in diff.deltas() {
-            let status = delta.status();
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .map(ToOwned::to_owned);
-            let Some(path) = path else { continue };
-            if conflicted.iter().any(|p| p == &path) {
-                continue;
-            }
+    /// Resolves marker-less conflicts right after merge start: sidecars
+    /// union-merge, modified sides resurrect, both-deleted drops (ADR 0014).
+    fn apply_merge_policies_locked(&self, repo: &git2::Repository) -> Result<(), RepositoryError> {
+        let mut index = repo
+            .index()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+        if !index.has_conflicts() {
+            return Ok(());
+        }
 
-            if status == git2::Delta::Deleted {
-                builder.remove(&path).map_err(|e| {
+        for path in conflicted_paths_of(&index) {
+            let has_ours = index.get_path(&path, 2).is_some();
+            let has_theirs = index.get_path(&path, 3).is_some();
+
+            if path.starts_with(".penna/") {
+                let merged = union_stage_tags(repo, &index, &path)?;
+                std::fs::write(self.root.join(&path), merged.as_bytes()).map_err(|e| {
                     RepositoryError::Storage(format!(
-                        "Failed to remove {}: {}",
+                        "Failed to write merged tags {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                index.add_path(&path).map_err(|e| {
+                    RepositoryError::Storage(format!(
+                        "Failed to stage merged tags {}: {}",
                         path.display(),
                         e
                     ))
@@ -1400,120 +1488,83 @@ impl ConflictView for GitEntryRepository {
                 continue;
             }
 
-            let oid = delta.new_file().id();
-            builder.insert(&path, oid, git2::FileMode::Blob as i32).map_err(|e| {
-                RepositoryError::Storage(format!(
-                    "Failed to take remote change of {}: {}",
-                    path.display(),
-                    e
-                ))
-            })?;
-        }
-
-        for path in &conflicted {
-            if !path.starts_with(".penna/") {
-                continue;
+            match (has_ours, has_theirs) {
+                (true, false) => {
+                    // Theirs deleted what we modified: ours wins in place.
+                    index.add_path(&path).map_err(|e| {
+                        RepositoryError::Storage(format!(
+                            "Failed to keep local {}: {}",
+                            path.display(),
+                            e
+                        ))
+                    })?;
+                }
+                (false, true) => {
+                    // We deleted what they modified: resurrect theirs.
+                    let content = stage_content(repo, &index, &path, 3).ok_or_else(|| {
+                        RepositoryError::Storage(format!(
+                            "Failed to read their side of {}",
+                            path.display()
+                        ))
+                    })?;
+                    std::fs::write(self.root.join(&path), content.as_bytes()).map_err(|e| {
+                        RepositoryError::Storage(format!(
+                            "Failed to resurrect {}: {}",
+                            path.display(),
+                            e
+                        ))
+                    })?;
+                    index.add_path(&path).map_err(|e| {
+                        RepositoryError::Storage(format!(
+                            "Failed to stage resurrected {}: {}",
+                            path.display(),
+                            e
+                        ))
+                    })?;
+                }
+                (false, false) => {
+                    // Both deleted: drop silently.
+                    if index.get_path(&path, 1).is_some() {
+                        let _ = index.remove(&path, 1);
+                    }
+                }
+                (true, true) => {}
             }
-            let merged = union_tag_file(&repo, &base, &ours, &theirs, path)?;
-            let blob_oid = repo.blob(merged.as_bytes()).map_err(|e| {
-                RepositoryError::Storage(format!("Failed to write merged tag blob: {}", e))
-            })?;
-            builder.insert(path, blob_oid, git2::FileMode::Blob as i32).map_err(|e| {
-                RepositoryError::Storage(format!(
-                    "Failed to store merged tags of {}: {}",
-                    path.display(),
-                    e
-                ))
-            })?;
         }
 
-        let tree_oid = builder.write().map_err(|e| {
-            RepositoryError::Storage(format!("Failed to write reconciliation tree: {}", e))
-        })?;
-        let tree = repo.find_tree(tree_oid).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to find reconciliation tree: {}", e))
-        })?;
-
-        let sig = self.create_signature()?;
-        repo.commit(
-            Some(&format!("refs/heads/{}", branch)),
-            &sig,
-            &sig,
-            "Reconcile journal divergence",
-            &tree,
-            &[&ours, &theirs],
-        )
-        .map_err(|e| RepositoryError::Storage(format!("Failed to commit reconciliation: {}", e)))?;
-
-        repo.checkout_head(Some(CheckoutBuilder::new().force()))
-            .map_err(|e| {
-                RepositoryError::Storage(format!("Failed to refresh working tree: {}", e))
-            })?;
+        index
+            .write()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write index: {}", e)))?;
 
         Ok(())
     }
 }
 
-impl GitEntryRepository {
-    /// Returns (local HEAD, remote-tracking HEAD) as OIDs when both sides
-    /// advanced past the merge base. None when not truly diverged.
-    fn diverged_head_oids(&self) -> Result<Option<(git2::Oid, git2::Oid)>, RepositoryError> {
-        let repo = self.repo.lock().unwrap();
-
-        let Ok(head) = repo.head() else {
-            return Ok(None);
-        };
-        let Some(branch) = head.shorthand().map(ToOwned::to_owned) else {
-            return Ok(None);
-        };
-        let Ok(ours) = head.peel_to_commit() else {
-            return Ok(None);
-        };
-        let Ok(remote_ref) = repo.find_reference(&format!("refs/remotes/origin/{}", branch)) else {
-            return Ok(None);
-        };
-        let Ok(theirs) = remote_ref.peel_to_commit() else {
-            return Ok(None);
-        };
-
-        let (ahead, behind) = repo
-            .graph_ahead_behind(ours.id(), theirs.id())
-            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
-
-        if ahead > 0 && behind > 0 {
-            Ok(Some((ours.id(), theirs.id())))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn merge_index_for(
-        &self,
-        repo: &git2::Repository,
-        ours: &git2::Commit<'_>,
-        theirs: &git2::Commit<'_>,
-    ) -> Result<git2::Index, RepositoryError> {
-        repo.merge_commits(ours, theirs, None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to compute merge view: {}", e)))
-    }
+fn stage_content(
+    repo: &git2::Repository,
+    index: &git2::Index,
+    path: &Path,
+    stage: i32,
+) -> Option<String> {
+    let entry = index.get_path(path, stage)?;
+    let blob = repo.find_blob(entry.id).ok()?;
+    String::from_utf8(blob.content().to_vec()).ok()
 }
 
-fn union_tag_file(
+fn union_stage_tags(
     repo: &git2::Repository,
-    _base: &git2::Commit<'_>,
-    ours: &git2::Commit<'_>,
-    theirs: &git2::Commit<'_>,
+    index: &git2::Index,
     path: &Path,
 ) -> Result<String, RepositoryError> {
-    let parse = |commit: &git2::Commit<'_>| -> Vec<String> {
-        read_blob_text(repo, commit, path)
+    let parse = |stage: i32| -> Vec<String> {
+        stage_content(repo, index, path, stage)
             .and_then(|text| serde_json::from_str::<TagsCatalogFile>(&text).ok())
             .map(|file| file.tags)
             .unwrap_or_default()
     };
 
-    let mut tags = parse(theirs);
-    for tag in parse(ours) {
+    let mut tags = parse(3);
+    for tag in parse(2) {
         if !tags.contains(&tag) {
             tags.push(tag);
         }
@@ -1524,6 +1575,7 @@ fn union_tag_file(
     serde_json::to_string_pretty(&TagsCatalogFile { tags })
         .map_err(|e| RepositoryError::Storage(format!("Failed to encode merged tag file: {}", e)))
 }
+
 
 fn conflicted_paths_of(index: &git2::Index) -> Vec<PathBuf> {    let mut paths: Vec<PathBuf> = Vec::new();
     let Ok(conflicts) = index.conflicts() else {
@@ -2015,60 +2067,74 @@ mod tests {
     }
 
     #[test]
-    fn test_conflict_view_detects_diverged_entry_edits() {
+    fn test_sync_starts_merge_with_conflict_markers() {
         let remote_dir = TempDir::new().unwrap();
         Repository::init_bare(remote_dir.path()).unwrap();
 
         let (_tmp_a, repo_a) = create_test_repo();
         add_origin_remote(&repo_a, remote_dir.path());
 
-        let shared = Entry {
-            id: EntryId("202608241500".to_string()),
+        let seed = Entry {
+            id: EntryId("202608250800".to_string()),
             title: "Shared".to_string(),
             body: "Original".to_string(),
             tags: vec![],
-            created_at: "ignored".to_string(),
-            updated_at: "ignored".to_string(),
+            created_at: "x".to_string(),
+            updated_at: "x".to_string(),
         };
-        repo_a.save(&shared).unwrap();
+        repo_a.save(&seed).unwrap();
         repo_a.push().unwrap();
 
         let clone_dir = TempDir::new().unwrap();
-        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let cloned =
+            Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
         let repo_b = GitEntryRepository::with_existing_repo(cloned);
 
-        let mut a_edit = repo_a.get("202608241500").unwrap().unwrap();
-        a_edit.body = "Edited on machine A".to_string();
+        let mut a_edit = repo_a.get("202608250800").unwrap().unwrap();
+        a_edit.body = "Machine A text".to_string();
         repo_a.save(&a_edit).unwrap();
 
-        let mut b_edit = repo_b.get("202608241500").unwrap().unwrap();
-        b_edit.body = "Edited on machine B".to_string();
+        let mut b_edit = repo_b.get("202608250800").unwrap().unwrap();
+        b_edit.body = "Machine B text".to_string();
         repo_b.save(&b_edit).unwrap();
         repo_b.push().unwrap();
 
         assert!(matches!(repo_a.sync().unwrap(), SyncResult::Diverged { .. }));
 
-        let conflicted = repo_a.list_conflicted_ids().unwrap();
-        assert_eq!(conflicted, vec!["202608241500".to_string()]);
+        let work_file = _tmp_a.path().join("202608250800.md");
+        let content = std::fs::read_to_string(&work_file).unwrap();
+        assert!(content.contains("<<<<<<<"), "markers must appear: {}", content);
+        assert!(content.contains(">>>>>>>"));
+        assert!(content.contains("Machine A text"));
+        assert!(content.contains("Machine B text"));
 
-        let conflict = repo_a.entry_conflict("202608241500").unwrap().unwrap();
-        assert!(conflict.ours.contains("machine A"));
-        assert!(conflict.theirs.contains("machine B"));
-        assert_eq!(conflict.base, "# Shared\n\nOriginal");
+        let status = repo_a.status().unwrap();
+        assert!(status.merge_in_progress);
+        assert!(status
+            .conflicted_paths
+            .iter()
+            .any(|p| p.ends_with("202608250800.md")));
 
-        assert!(repo_a.entry_conflict("999912312359").unwrap().is_none());
+        let listed = repo_a.list().unwrap();
+        let conflicted_entry = listed.iter().find(|e| e.id.0 == "202608250800").unwrap();
+        assert!(
+            conflicted_entry.body.contains("<<<<<<<"),
+            "reads must surface working-tree markers"
+        );
+
+        let conflict_view = repo_a.entry_conflict("202608250800").unwrap().unwrap();
+        assert!(conflict_view.ours.contains("Machine A text"));
+        assert!(conflict_view.theirs.contains("Machine B text"));
+
+        assert_eq!(
+            repo_a.list_conflicted_ids().unwrap(),
+            vec!["202608250800".to_string()]
+        );
     }
 
     #[test]
-    fn test_conflict_view_empty_when_not_diverged_or_clean() {
-        let (_tmp, repo) = create_test_repo();
-        assert!(repo.list_conflicted_ids().unwrap().is_empty());
-        assert!(repo.entry_conflict("202608241500").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_resolve_then_repush_after_manual_merge() {
-        use penna_core::application::ResolveEntryConflictUseCase;
+    fn test_resolved_save_stages_then_sync_concludes() {
+        use penna_core::ports::ConflictView;
 
         let remote_dir = TempDir::new().unwrap();
         Repository::init_bare(remote_dir.path()).unwrap();
@@ -2076,8 +2142,8 @@ mod tests {
         let (_tmp_a, repo_a) = create_test_repo();
         add_origin_remote(&repo_a, remote_dir.path());
 
-        let mut seed = Entry {
-            id: EntryId("202608241600".to_string()),
+        let seed = Entry {
+            id: EntryId("202608250900".to_string()),
             title: "Seed".to_string(),
             body: "Start".to_string(),
             tags: vec![],
@@ -2088,50 +2154,148 @@ mod tests {
         repo_a.push().unwrap();
 
         let clone_dir = TempDir::new().unwrap();
-        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let cloned =
+            Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
         let repo_b = GitEntryRepository::with_existing_repo(cloned);
 
-        seed.body = "A version".to_string();
-        repo_a.save(&seed).unwrap();
+        let mut a_edit = repo_a.get("202608250900").unwrap().unwrap();
+        a_edit.body = "A version".to_string();
+        repo_a.save(&a_edit).unwrap();
 
-        let mut b_entry = repo_b.get("202608241600").unwrap().unwrap();
-        b_entry.body = "B version".to_string();
-        repo_b.save(&b_entry).unwrap();
+        let mut b_edit = repo_b.get("202608250900").unwrap().unwrap();
+        b_edit.body = "B version".to_string();
+        repo_b.save(&b_edit).unwrap();
         repo_b.push().unwrap();
 
         assert!(matches!(repo_a.sync().unwrap(), SyncResult::Diverged { .. }));
+
+        let head_before = repo_a.status().unwrap().head_commit.clone().unwrap();
+
+        // Frontend resolves by writing clean text through the normal save path.
+        let mut resolved = repo_a.get("202608250900").unwrap().unwrap();
+        resolved.body = "Merged by hand".to_string();
+        repo_a.save(&resolved).unwrap();
+
+        let head_after_stage = repo_a.status().unwrap().head_commit.clone().unwrap();
+        assert_eq!(
+            head_before, head_after_stage,
+            "mid-merge saves stage without committing"
+        );
+        assert!(!std::fs::read_to_string(_tmp_a.path().join("202608250900.md"))
+            .unwrap()
+            .contains("<<<<<<<"));
+
+        // Next sync detects the finished merge and concludes it.
         assert!(matches!(
-            repo_a.push().unwrap(),
-            SyncResult::Diverged { .. }
+            repo_a.sync().unwrap(),
+            SyncResult::Pulled { .. }
         ));
 
-        let conflict = repo_a.entry_conflict("202608241600").unwrap().unwrap();
-        let merged = format!(
-            "{}\n{}",
-            conflict.ours.trim_end(),
-            conflict.theirs.replace("# Seed\n\n", "")
-        );
+        let head_concluded = repo_a.status().unwrap().head_commit.clone().unwrap();
+        assert_ne!(head_before, head_concluded);
+        assert!(!repo_a.status().unwrap().merge_in_progress);
 
-        let use_case = ResolveEntryConflictUseCase::new(repo_a.clone());
-        use_case.execute("202608241600", &merged).unwrap();
-
-        let resolved = repo_a.get("202608241600").unwrap().unwrap();
-        assert!(resolved.body.contains("A version"));
-        assert!(resolved.body.contains("B version"));
-
-        repo_a.reconcile_with_remote().unwrap();
         assert!(matches!(repo_a.push().unwrap(), SyncResult::Pushed { .. }));
-
-        let mut b_entry = repo_b.get("202608241600").unwrap().unwrap();
-        b_entry.body = "B side note".to_string();
-        repo_b.save(&b_entry).unwrap();
-        repo_b.push().unwrap();
-        repo_a.pull().unwrap();
-
-        let synced = repo_a.get("202608241600").unwrap().unwrap();
-        assert!(synced.body.contains("B version"));
+        repo_b.pull().unwrap();
+        let mirrored = repo_b.get("202608250900").unwrap().unwrap();
+        assert_eq!(mirrored.body, "Merged by hand");
     }
 
+    #[test]
+    fn test_merge_policies_for_marker_less_conflicts() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        for id in ["202608250901", "202608250902", "202608250903"] {
+            repo_a
+                .save(&Entry {
+                    id: EntryId(id.to_string()),
+                    title: format!("T{}", &id[id.len() - 1..]),
+                    body: "Base".to_string(),
+                    tags: vec![],
+                    created_at: "x".to_string(),
+                    updated_at: "x".to_string(),
+                })
+                .unwrap();
+        }
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned =
+            Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+
+        // A modifies 901, deletes 903.
+        let mut a_edit = repo_a.get("202608250901").unwrap().unwrap();
+        a_edit.body = "A modified".to_string();
+        repo_a.save(&a_edit).unwrap();
+        repo_a.delete("202608250903").unwrap();
+
+        // B modifies 902, modifies 903 too.
+        let mut b_edit = repo_b.get("202608250902").unwrap().unwrap();
+        b_edit.body = "B modified".to_string();
+        repo_b.save(&b_edit).unwrap();
+        let mut b_other = repo_b.get("202608250903").unwrap().unwrap();
+        b_other.body = "B kept this".to_string();
+        repo_b.save(&b_other).unwrap();
+        repo_b.push().unwrap();
+
+        // Divergence resolves automatically via policies.
+        assert!(matches!(repo_a.sync().unwrap(), SyncResult::Pulled { .. }));
+        let status = repo_a.status().unwrap();
+        assert!(!status.merge_in_progress, "{:?}", status.conflicted_paths);
+
+        let kept = repo_a.get("202608250901").unwrap().unwrap();
+        assert_eq!(kept.body, "A modified");
+
+        let resurrected = repo_a.get("202608250903").unwrap().unwrap();
+        assert_eq!(resurrected.body, "B kept this");
+
+        let theirs_change = repo_a.get("202608250902").unwrap().unwrap();
+        assert_eq!(theirs_change.body, "B modified");
+    }
+
+    #[test]
+    fn test_tag_sidecar_divergence_auto_unions_without_markers() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        repo_a
+            .save(&Entry {
+                id: EntryId("202608250910".to_string()),
+                title: "T".to_string(),
+                body: "Body".to_string(),
+                tags: vec![],
+                created_at: "x".to_string(),
+                updated_at: "x".to_string(),
+            })
+            .unwrap();
+        repo_a.add_tag("alpha").unwrap();
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned =
+            Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+        repo_b.add_tag("beta").unwrap();
+        repo_b.push().unwrap();
+
+        repo_a.add_tag("gamma").unwrap();
+        assert!(matches!(repo_a.sync().unwrap(), SyncResult::Pulled { .. }));
+
+        assert!(!repo_a.status().unwrap().merge_in_progress);
+        assert!(repo_a.list_conflicted_ids().unwrap().is_empty());
+        let tags = repo_a.list_tags().unwrap();
+        assert!(tags.contains(&"alpha".to_string()));
+        assert!(tags.contains(&"beta".to_string()));
+        assert!(tags.contains(&"gamma".to_string()));
+    }
     #[test]
     fn test_attachments_round_trip_and_delete_cleanup() {
         use penna_core::ports::AttachmentStore;
