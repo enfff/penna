@@ -17,7 +17,7 @@ members = [
 # ones that get published to crates.io (penna-core, penna-adapters-git,
 # penna-engine).
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/enfff/penna"

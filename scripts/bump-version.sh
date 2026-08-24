@@ -67,6 +67,21 @@ fi
 # --- Write the new version into the root manifest ----------------------------
 sed -i 's/^version = "[0-9][0-9.]*"$/version = "'"$VERSION"'"/' Cargo.toml
 
+# --- Keep internal dependency requirements in lockstep -----------------------
+# Member manifests pin each other with a literal caret requirement. Caret
+# rules cannot cross 0.x minor boundaries ("^0.1.0" rejects 0.2.0), so every
+# internal dep line must move with the workspace version or resolution fails.
+INTERNAL_MANIFESTS=(
+    core/Cargo.toml
+    engine/Cargo.toml
+    adapters/git/Cargo.toml
+    adapters/fs/Cargo.toml
+    adapters/markdown/Cargo.toml
+)
+for manifest in "${INTERNAL_MANIFESTS[@]}"; do
+    sed -i 's/penna-\([a-z-]*\) = { version = "[0-9][0-9.]*"/penna-\1 = { version = "'"$VERSION"'"/' "$manifest"
+done
+
 # --- Refresh Cargo.lock so the workspace packages carry the new version ------
 # Workspace members' locked versions mirror their manifests, so after the
 # manifest bump a regenerate is required to get the five penna-* entries
@@ -99,7 +114,7 @@ fi
 # locally (stale from a failed prior run), delete it first — but refuse to
 # proceed if it exists remotely.
 if [[ "$DO_COMMIT" -eq 1 && -d .git ]]; then
-    git add Cargo.toml Cargo.lock
+    git add Cargo.toml Cargo.lock "${INTERNAL_MANIFESTS[@]}"
     git commit -q -m "chore(release): bump to $VERSION"
     if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
         if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
