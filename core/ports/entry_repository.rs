@@ -1,4 +1,4 @@
-use crate::domain::{Document, Entry, Sidecar};
+use crate::domain::{Document, Entry, EntryConflict, Sidecar};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +29,15 @@ pub trait JournalSync: Send + Sync {
     fn sync(&self) -> Result<SyncResult, RepositoryError>;
     fn pull(&self) -> Result<SyncResult, RepositoryError>;
     fn push(&self) -> Result<SyncResult, RepositoryError>;
+}
+
+/// Three-way conflict view for diverged journals (ADR 0006).
+pub trait ConflictView: Send + Sync {
+    fn list_conflicted_ids(&self) -> Result<Vec<String>, RepositoryError>;
+    fn entry_conflict(&self, id: &str) -> Result<Option<EntryConflict>, RepositoryError>;
+    /// Creates the reconciling merge commit. Local side wins conflicted
+    /// paths; clean paths auto-merge.
+    fn reconcile_with_remote(&self) -> Result<(), RepositoryError>;
 }
 
 pub trait JournalClone: Send + Sync {

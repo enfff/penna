@@ -483,6 +483,60 @@ Output (malformed):
 }
 ```
 
+## Conflict Resolution (ADR 0006)
+
+When a sync report has status `diverged`, `conflicts` lists entry ids whose
+bodies changed differently on both machines. The frontend merge-editor flow:
+
+1. `get_entry_conflict` returns the three raw Markdown versions for the
+   editor (base = common ancestor, ours = local, theirs = remote).
+
+Input:
+
+```json
+{ "session_id": "session-...", "id": "202608241500" }
+```
+
+Output (null when the entry is not conflicted):
+
+```json
+{
+  "conflict": {
+    "entry_id": "202608241500",
+    "base": "# Title\n\nancestor text",
+    "ours": "# Title\n\nlocal text",
+    "theirs": "# Title\n\nremote text"
+  }
+}
+```
+
+2. The user edits in-app; quick presets ("keep ours"/"keep theirs") are
+   frontend shortcuts producing the same resolved text.
+3. `resolve_entry_conflict` writes the user's body as a normal update
+   commit; title, tags, and created_at stay from the local side.
+
+Input:
+
+```json
+{ "session_id": "session-...", "id": "202608241500", "resolved_body": "# Title\n\nmerged text" }
+```
+
+4. After all entries are resolved, `reconcile_journal` creates the merge
+   commit: conflicted bodies keep the resolved local text, clean changes
+   from both sides auto-merge, and tag sidecars merge by set union.
+
+Output:
+
+```json
+{ "status": "reconciled", "branch": "master", "ahead": null, "behind": null, "conflicts": [] }
+```
+
+5. Push as usual afterwards; the remote fast-forwards to the reconciled
+   history.
+
+Pushing while still diverged is refused (`diverged` status) so remote work
+is never overwritten silently.
+
 ## Authentication (ADR 0010)
 
 Sync methods resolve credentials automatically, in order:

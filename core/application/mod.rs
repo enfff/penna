@@ -16,6 +16,13 @@ pub mod resolve_journal_path;
 pub mod pull_journal;
 pub mod push_journal;
 pub mod validate_sidecar_integrity;
+pub mod get_entry_conflict;
+pub mod resolve_entry_conflict;
+pub mod reconcile_journal;
+
+pub use get_entry_conflict::GetEntryConflictUseCase;
+pub use resolve_entry_conflict::{ResolveEntryConflictError, ResolveEntryConflictUseCase};
+pub use reconcile_journal::ReconcileJournalUseCase;
 
 pub use create_entry::{CreateEntryError, CreateEntryInput, CreateEntryUseCase};
 pub use delete_entry::DeleteEntryUseCase;

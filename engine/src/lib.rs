@@ -2,14 +2,18 @@ use chrono::{Duration, Local};
 use penna_adapters_git::{GitEntryRepository, GitJournalCloner};
 use penna_core::application::{
     AddTagError, AddTagUseCase, CloneJournalUseCase, CreateEntryError, CreateEntryInput,
-    CreateEntryUseCase, DeleteEntryUseCase, GetEntryUseCase, ListEntriesUseCase,
-    ListTagsUseCase, PullJournalUseCase, PushJournalUseCase, RemoveTagError,
-    RemoveTagUseCase, ResolveJournalPathUseCase, SidecarIntegrityStatus, SidecarSource,
-    SyncJournalUseCase, UpdateEntryError, UpdateEntryInput, UpdateEntryUseCase,
-    UpdateTagError, UpdateTagUseCase, ValidateSidecarIntegrityUseCase,
+    CreateEntryUseCase, DeleteEntryUseCase, GetEntryConflictUseCase, GetEntryUseCase,
+    ListEntriesUseCase, ListTagsUseCase, PullJournalUseCase, PushJournalUseCase,
+    ReconcileJournalUseCase, RemoveTagError, RemoveTagUseCase,
+    ResolveEntryConflictError, ResolveEntryConflictUseCase, ResolveJournalPathUseCase,
+    SidecarIntegrityStatus, SidecarSource, SyncJournalUseCase, UpdateEntryError,
+    UpdateEntryInput, UpdateEntryUseCase, UpdateTagError, UpdateTagUseCase,
+    ValidateSidecarIntegrityUseCase,
 };
-use penna_core::domain::{Entry, Sidecar};
-use penna_core::ports::{EntryRepository, RepositoryError, SyncResult};
+use penna_core::domain::{Entry, EntryConflict, Sidecar};
+use penna_core::ports::{
+    ConflictView, EntryRepository, RepositoryError, SyncResult,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -179,6 +183,9 @@ pub struct SyncReport {
     pub branch: Option<String>,
     pub ahead: Option<usize>,
     pub behind: Option<usize>,
+    /// Entry ids needing merge-editor resolution (ADR 0006); non-empty
+    /// only when status is `diverged`.
+    pub conflicts: Vec<String>,
 }
 
 impl From<SyncResult> for SyncReport {
@@ -186,30 +193,35 @@ impl From<SyncResult> for SyncReport {
         match value {
             SyncResult::UpToDate { branch } => Self {
                 status: "up_to_date".to_string(),
+                conflicts: Vec::new(),
                 branch: Some(branch),
                 ahead: None,
                 behind: None,
             },
             SyncResult::NoRemote => Self {
                 status: "no_remote".to_string(),
+                conflicts: Vec::new(),
                 branch: None,
                 ahead: None,
                 behind: None,
             },
             SyncResult::NoBranch => Self {
                 status: "no_branch".to_string(),
+                conflicts: Vec::new(),
                 branch: None,
                 ahead: None,
                 behind: None,
             },
             SyncResult::Pulled { branch } => Self {
                 status: "pulled".to_string(),
+                conflicts: Vec::new(),
                 branch: Some(branch),
                 ahead: None,
                 behind: None,
             },
             SyncResult::Pushed { branch } => Self {
                 status: "pushed".to_string(),
+                conflicts: Vec::new(),
                 branch: Some(branch),
                 ahead: None,
                 behind: None,
@@ -220,6 +232,7 @@ impl From<SyncResult> for SyncReport {
                 behind,
             } => Self {
                 status: "diverged".to_string(),
+                conflicts: Vec::new(),
                 branch: Some(branch),
                 ahead: Some(ahead),
                 behind: Some(behind),
@@ -337,18 +350,30 @@ impl PennaEngine {
         })
     }
 
+    fn sync_report_with_conflicts(
+        &self,
+        state: &SessionState,
+        result: SyncResult,
+    ) -> Result<SyncReport, EngineError> {
+        let mut report: SyncReport = result.into();
+        if report.status == "diverged" {
+            report.conflicts = state.repo.list_conflicted_ids().map_err(EngineError::from)?;
+        }
+        Ok(report)
+    }
+
     pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
         let state = self.session(session_id)?;
         let use_case = PullJournalUseCase::new(state.repo.clone());
         let result = use_case.execute().map_err(EngineError::from)?;
-        Ok(result.into())
+        self.sync_report_with_conflicts(&state, result)
     }
 
     pub fn push_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
         let state = self.session(session_id)?;
         let use_case = PushJournalUseCase::new(state.repo.clone());
         let result = use_case.execute().map_err(EngineError::from)?;
-        Ok(result.into())
+        self.sync_report_with_conflicts(&state, result)
     }
 
     fn register_session(
@@ -470,7 +495,50 @@ impl PennaEngine {
         let state = self.session(session_id)?;
         let use_case = SyncJournalUseCase::new(state.repo.clone());
         let result = use_case.execute().map_err(EngineError::from)?;
-        Ok(result.into())
+        self.sync_report_with_conflicts(&state, result)
+    }
+
+    pub fn get_entry_conflict(
+        &self,
+        session_id: &str,
+        id: &str,
+    ) -> Result<Option<EntryConflict>, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = GetEntryConflictUseCase::new(state.repo.clone());
+        use_case.execute(id).map_err(EngineError::from)
+    }
+
+    pub fn reconcile_journal(&self, session_id: &str) -> Result<SyncReport, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = ReconcileJournalUseCase::new(state.repo.clone());
+        use_case.execute().map_err(EngineError::from)?;
+
+        let status = state.repo.status().map_err(EngineError::from)?;
+        Ok(SyncReport {
+            status: "reconciled".to_string(),
+            branch: status.branch,
+            ahead: None,
+            behind: None,
+            conflicts: Vec::new(),
+        })
+    }
+
+    pub fn resolve_entry_conflict(
+        &self,
+        session_id: &str,
+        id: &str,
+        resolved_body: &str,
+    ) -> Result<Entry, EngineError> {
+        let state = self.session(session_id)?;
+        let use_case = ResolveEntryConflictUseCase::new(state.repo.clone());
+        use_case
+            .execute(id, resolved_body)
+            .map_err(|err| match err {
+                ResolveEntryConflictError::NotFound(id) => {
+                    EngineError::Repo(RepositoryError::NotFound(id))
+                }
+                ResolveEntryConflictError::Repository(err) => EngineError::from(err),
+            })
     }
 
     pub fn list_tags(&self, session_id: &str) -> Result<Vec<String>, EngineError> {

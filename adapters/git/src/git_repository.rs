@@ -1,9 +1,9 @@
 use git2::build::CheckoutBuilder;
 use git2::{Cred, CredentialType, RemoteCallbacks, Repository, Signature};
-use penna_core::domain::{Entry, EntryId};
+use penna_core::domain::{Entry, EntryConflict, EntryId};
 use penna_core::ports::{
-    EntryRepository, JournalClone, JournalPath, JournalSync, RepositoryError, SyncResult,
-    TagCatalog,
+    ConflictView, EntryRepository, JournalClone, JournalPath, JournalSync, RepositoryError,
+    SyncResult, TagCatalog,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -658,7 +658,7 @@ impl GitEntryRepository {
                 Ok(SyncResult::Pulled { branch })
             }
             SyncMode::PushOnly => {
-                if ahead == 0 {
+                if ahead == 0 || behind > 0 {
                     return Ok(SyncResult::Diverged {
                         branch,
                         ahead,
@@ -1003,6 +1003,300 @@ impl JournalSync for GitEntryRepository {
     fn push(&self) -> Result<SyncResult, RepositoryError> {
         self.sync_with_mode(SyncMode::PushOnly)
     }
+}
+
+fn read_blob_text(
+    repo: &git2::Repository,
+    commit: &git2::Commit<'_>,
+    path: &Path,
+) -> Option<String> {
+    let entry = commit.tree().ok()?.get_path(path).ok()?;
+    let object = entry.to_object(repo).ok()?;
+    let blob = object.into_blob().ok()?;
+    String::from_utf8(blob.content().to_vec()).ok()
+}
+
+impl ConflictView for GitEntryRepository {
+    fn list_conflicted_ids(&self) -> Result<Vec<String>, RepositoryError> {
+        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
+            return Ok(Vec::new());
+        };
+
+        let repo = self.repo.lock().unwrap();
+        let ours = repo.find_commit(ours_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
+        })?;
+        let theirs = repo.find_commit(theirs_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
+        })?;
+
+        let merge_index = self.merge_index_for(&repo, &ours, &theirs)?;
+        let mut ids = Vec::new();
+        for path in conflicted_paths_of(&merge_index) {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if let Some(stem) = name.strip_suffix(".md") {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    fn entry_conflict(&self, id: &str) -> Result<Option<EntryConflict>, RepositoryError> {
+        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
+            return Ok(None);
+        };
+
+        let repo = self.repo.lock().unwrap();
+        let ours_commit = repo.find_commit(ours_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
+        })?;
+        let theirs_commit = repo.find_commit(theirs_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
+        })?;
+        let base_oid = repo
+            .merge_base(ours_oid, theirs_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find merge base: {}", e)))?;
+        let base_commit = repo.find_commit(base_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find merge base commit: {}", e))
+        })?;
+
+        let entry_path = self.entry_path(id);
+        let (base, ours, theirs) = (
+            read_blob_text(&repo, &base_commit, &entry_path),
+            read_blob_text(&repo, &ours_commit, &entry_path),
+            read_blob_text(&repo, &theirs_commit, &entry_path),
+        );
+
+        let (Some(base), Some(ours), Some(theirs)) = (base, ours, theirs) else {
+            return Ok(None);
+        };
+
+        let both_modified_differently = ours != theirs && ours != base && theirs != base;
+        if !both_modified_differently {
+            return Ok(None);
+        }
+
+        Ok(Some(EntryConflict {
+            entry_id: id.to_string(),
+            base,
+            ours,
+            theirs,
+        }))
+    }
+
+    fn reconcile_with_remote(&self) -> Result<(), RepositoryError> {
+        let Some((ours_oid, theirs_oid)) = self.diverged_head_oids()? else {
+            return Ok(());
+        };
+
+        let repo = self.repo.lock().unwrap();
+        let ours = repo.find_commit(ours_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find head commit: {}", e))
+        })?;
+        let theirs = repo.find_commit(theirs_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find remote commit: {}", e))
+        })?;
+
+        let merge_index = self.merge_index_for(&repo, &ours, &theirs)?;
+        let branch = match repo.head().ok().and_then(|h| h.shorthand().map(ToOwned::to_owned)) {
+            Some(branch) => branch,
+            None => return Ok(()),
+        };
+
+        let base_oid = repo
+            .merge_base(ours_oid, theirs_oid)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find merge base: {}", e)))?;
+        let base = repo.find_commit(base_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find merge base commit: {}", e))
+        })?;
+
+        let conflicted = conflicted_paths_of(&merge_index);
+        drop(merge_index);
+
+        let base_tree = base.tree().map_err(|e| {
+            RepositoryError::Storage(format!("Failed to get merge base tree: {}", e))
+        })?;
+        let ours_tree = ours.tree().map_err(|e| {
+            RepositoryError::Storage(format!("Failed to get local tree: {}", e))
+        })?;
+        let theirs_tree = theirs.tree().map_err(|e| {
+            RepositoryError::Storage(format!("Failed to get remote tree: {}", e))
+        })?;
+
+        let mut builder = repo.treebuilder(Some(&ours_tree)).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to open tree builder: {}", e))
+        })?;
+
+        let diff = repo
+            .diff_tree_to_tree(Some(&base_tree), Some(&theirs_tree), None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to diff remote changes: {}", e)))?;
+
+        for delta in diff.deltas() {
+            let status = delta.status();
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(ToOwned::to_owned);
+            let Some(path) = path else { continue };
+            if conflicted.iter().any(|p| p == &path) {
+                continue;
+            }
+
+            if status == git2::Delta::Deleted {
+                builder.remove(&path).map_err(|e| {
+                    RepositoryError::Storage(format!(
+                        "Failed to remove {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                continue;
+            }
+
+            let oid = delta.new_file().id();
+            builder.insert(&path, oid, git2::FileMode::Blob as i32).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to take remote change of {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+        }
+
+        for path in &conflicted {
+            if !path.starts_with(".penna/") {
+                continue;
+            }
+            let merged = union_tag_file(&repo, &base, &ours, &theirs, path)?;
+            let blob_oid = repo.blob(merged.as_bytes()).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to write merged tag blob: {}", e))
+            })?;
+            builder.insert(path, blob_oid, git2::FileMode::Blob as i32).map_err(|e| {
+                RepositoryError::Storage(format!(
+                    "Failed to store merged tags of {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+        }
+
+        let tree_oid = builder.write().map_err(|e| {
+            RepositoryError::Storage(format!("Failed to write reconciliation tree: {}", e))
+        })?;
+        let tree = repo.find_tree(tree_oid).map_err(|e| {
+            RepositoryError::Storage(format!("Failed to find reconciliation tree: {}", e))
+        })?;
+
+        let sig = self.create_signature()?;
+        repo.commit(
+            Some(&format!("refs/heads/{}", branch)),
+            &sig,
+            &sig,
+            "Reconcile journal divergence",
+            &tree,
+            &[&ours, &theirs],
+        )
+        .map_err(|e| RepositoryError::Storage(format!("Failed to commit reconciliation: {}", e)))?;
+
+        repo.checkout_head(Some(CheckoutBuilder::new().force()))
+            .map_err(|e| {
+                RepositoryError::Storage(format!("Failed to refresh working tree: {}", e))
+            })?;
+
+        Ok(())
+    }
+}
+
+impl GitEntryRepository {
+    /// Returns (local HEAD, remote-tracking HEAD) as OIDs when both sides
+    /// advanced past the merge base. None when not truly diverged.
+    fn diverged_head_oids(&self) -> Result<Option<(git2::Oid, git2::Oid)>, RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+
+        let Ok(head) = repo.head() else {
+            return Ok(None);
+        };
+        let Some(branch) = head.shorthand().map(ToOwned::to_owned) else {
+            return Ok(None);
+        };
+        let Ok(ours) = head.peel_to_commit() else {
+            return Ok(None);
+        };
+        let Ok(remote_ref) = repo.find_reference(&format!("refs/remotes/origin/{}", branch)) else {
+            return Ok(None);
+        };
+        let Ok(theirs) = remote_ref.peel_to_commit() else {
+            return Ok(None);
+        };
+
+        let (ahead, behind) = repo
+            .graph_ahead_behind(ours.id(), theirs.id())
+            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
+
+        if ahead > 0 && behind > 0 {
+            Ok(Some((ours.id(), theirs.id())))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn merge_index_for(
+        &self,
+        repo: &git2::Repository,
+        ours: &git2::Commit<'_>,
+        theirs: &git2::Commit<'_>,
+    ) -> Result<git2::Index, RepositoryError> {
+        repo.merge_commits(ours, theirs, None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to compute merge view: {}", e)))
+    }
+}
+
+fn union_tag_file(
+    repo: &git2::Repository,
+    _base: &git2::Commit<'_>,
+    ours: &git2::Commit<'_>,
+    theirs: &git2::Commit<'_>,
+    path: &Path,
+) -> Result<String, RepositoryError> {
+    let parse = |commit: &git2::Commit<'_>| -> Vec<String> {
+        read_blob_text(repo, commit, path)
+            .and_then(|text| serde_json::from_str::<TagsCatalogFile>(&text).ok())
+            .map(|file| file.tags)
+            .unwrap_or_default()
+    };
+
+    let mut tags = parse(theirs);
+    for tag in parse(ours) {
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags.sort();
+    tags.dedup();
+
+    serde_json::to_string_pretty(&TagsCatalogFile { tags })
+        .map_err(|e| RepositoryError::Storage(format!("Failed to encode merged tag file: {}", e)))
+}
+
+fn conflicted_paths_of(index: &git2::Index) -> Vec<PathBuf> {    let mut paths: Vec<PathBuf> = Vec::new();
+    let Ok(conflicts) = index.conflicts() else {
+        return paths;
+    };
+    for conflict in conflicts.flatten() {
+        for entry in [conflict.ancestor, conflict.our, conflict.their]
+            .into_iter()
+            .flatten()
+        {
+            let path = PathBuf::from(String::from_utf8_lossy(&entry.path).into_owned());
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -1474,5 +1768,123 @@ mod tests {
         let second = repo.get("202608131702").unwrap().unwrap();
         assert!(!first.tags.contains(&"work".to_string()));
         assert!(!second.tags.contains(&"work".to_string()));
+    }
+
+    #[test]
+    fn test_conflict_view_detects_diverged_entry_edits() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        let shared = Entry {
+            id: EntryId("202608241500".to_string()),
+            title: "Shared".to_string(),
+            body: "Original".to_string(),
+            tags: vec![],
+            created_at: "ignored".to_string(),
+            updated_at: "ignored".to_string(),
+        };
+        repo_a.save(&shared).unwrap();
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+
+        let mut a_edit = repo_a.get("202608241500").unwrap().unwrap();
+        a_edit.body = "Edited on machine A".to_string();
+        repo_a.save(&a_edit).unwrap();
+
+        let mut b_edit = repo_b.get("202608241500").unwrap().unwrap();
+        b_edit.body = "Edited on machine B".to_string();
+        repo_b.save(&b_edit).unwrap();
+        repo_b.push().unwrap();
+
+        assert!(matches!(repo_a.sync().unwrap(), SyncResult::Diverged { .. }));
+
+        let conflicted = repo_a.list_conflicted_ids().unwrap();
+        assert_eq!(conflicted, vec!["202608241500".to_string()]);
+
+        let conflict = repo_a.entry_conflict("202608241500").unwrap().unwrap();
+        assert!(conflict.ours.contains("machine A"));
+        assert!(conflict.theirs.contains("machine B"));
+        assert_eq!(conflict.base, "# Shared\n\nOriginal");
+
+        assert!(repo_a.entry_conflict("999912312359").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_conflict_view_empty_when_not_diverged_or_clean() {
+        let (_tmp, repo) = create_test_repo();
+        assert!(repo.list_conflicted_ids().unwrap().is_empty());
+        assert!(repo.entry_conflict("202608241500").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_resolve_then_repush_after_manual_merge() {
+        use penna_core::application::ResolveEntryConflictUseCase;
+
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        let mut seed = Entry {
+            id: EntryId("202608241600".to_string()),
+            title: "Seed".to_string(),
+            body: "Start".to_string(),
+            tags: vec![],
+            created_at: "x".to_string(),
+            updated_at: "x".to_string(),
+        };
+        repo_a.save(&seed).unwrap();
+        repo_a.push().unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned = Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+
+        seed.body = "A version".to_string();
+        repo_a.save(&seed).unwrap();
+
+        let mut b_entry = repo_b.get("202608241600").unwrap().unwrap();
+        b_entry.body = "B version".to_string();
+        repo_b.save(&b_entry).unwrap();
+        repo_b.push().unwrap();
+
+        assert!(matches!(repo_a.sync().unwrap(), SyncResult::Diverged { .. }));
+        assert!(matches!(
+            repo_a.push().unwrap(),
+            SyncResult::Diverged { .. }
+        ));
+
+        let conflict = repo_a.entry_conflict("202608241600").unwrap().unwrap();
+        let merged = format!(
+            "{}\n{}",
+            conflict.ours.trim_end(),
+            conflict.theirs.replace("# Seed\n\n", "")
+        );
+
+        let use_case = ResolveEntryConflictUseCase::new(repo_a.clone());
+        use_case.execute("202608241600", &merged).unwrap();
+
+        let resolved = repo_a.get("202608241600").unwrap().unwrap();
+        assert!(resolved.body.contains("A version"));
+        assert!(resolved.body.contains("B version"));
+
+        repo_a.reconcile_with_remote().unwrap();
+        assert!(matches!(repo_a.push().unwrap(), SyncResult::Pushed { .. }));
+
+        let mut b_entry = repo_b.get("202608241600").unwrap().unwrap();
+        b_entry.body = "B side note".to_string();
+        repo_b.save(&b_entry).unwrap();
+        repo_b.push().unwrap();
+        repo_a.pull().unwrap();
+
+        let synced = repo_a.get("202608241600").unwrap().unwrap();
+        assert!(synced.body.contains("B version"));
     }
 }
