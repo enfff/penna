@@ -39,6 +39,7 @@ The agent must check the existing ADRs before it proposes a decision. The agent 
 - The Markdown importer must not fail on unknown syntax.
 - The Markdown importer must degrade gracefully on unknown syntax. The importer must fall back to plain text or a raw block.
 - The Markdown exporter must remove the JSON sidecar by default. This keeps exported files portable.
+- The GUI frontend must use GTK4 + Libadwaita. When a Libadwaita component exists, it must be preferred over native GTK widgets (ADR 0013).
 
 ## Where New Code Goes
 

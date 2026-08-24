@@ -38,6 +38,10 @@ The engine is frontend-agnostic.
 
 7. If architecture changes, update docs/ARCHITECTURE.md in the same change.
 
+8. The GUI frontend must use GTK4 + Libadwaita.
+- When a Libadwaita component exists, prefer it over native GTK widgets (ADR 0013).
+- Raw gtk4 widgets only where Adw has no equivalent.
+
 ## Implementation placement
 
 - Use cases: core/application

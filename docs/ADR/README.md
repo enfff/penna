@@ -12,3 +12,4 @@
 - [0010 - OS-Native Git Credentials](./0010-os-native-git-credentials.md)
 - [0011 - Cursor-Based Summary Listing](./0011-cursor-based-summary-listing.md) (Rejected — full-list `list_entries` stands)
 - [0012 - Attachments As Per-Entry Directories](./0012-attachments-as-per-entry-directories.md)
+- [0013 - GTK4 With Libadwaita For The GUI Frontend](./0013-gtk4-libadwaita-for-gui-frontend.md)
