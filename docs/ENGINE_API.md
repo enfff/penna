@@ -488,8 +488,11 @@ Output (malformed):
 Sync methods resolve credentials automatically, in order:
 
 1. SSH remotes: the user's ssh-agent.
-2. HTTPS remotes: `PENNA_GIT_TOKEN` env var, then `GITHUB_TOKEN`, then the
-   OS keychain (service `penna`, user = remote URL).
+2. HTTPS remotes: the provider-neutral `PENNA_GIT_TOKEN` env var, then the
+   OS keychain (service `penna`, user = remote URL). The token is sent as
+   the basic-auth password with a neutral username; works with any git
+   server that accepts token auth (GitHub, GitLab, Gitea, Azure DevOps,
+   self-hosted).
 3. Local/file remotes need no credentials.
 
 When authentication is required but unavailable, sync fails with code

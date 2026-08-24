@@ -20,9 +20,13 @@ no accounts, and nothing sensitive written where the user did not put it.
 2. Resolution order per remote, tried in sequence:
    - SSH remotes (`ssh://`, `git@host:path`): the user's ssh-agent, falling
      back to default key paths. No secrets touch Penna storage.
-   - HTTPS remotes: environment variables first
-     (`PENNA_GIT_TOKEN`, then provider-conventional variables), then the OS
-     keychain via the `keyring` crate scoped to `penna.<remote_url>`.
+   - HTTPS remotes: the provider-neutral `PENNA_GIT_TOKEN` environment
+     variable first, then the OS keychain via the `keyring` crate, scoped
+     to service `penna` with the remote URL as account. Penna deliberately
+     does not probe provider-specific variables (`GITHUB_TOKEN`,
+     `GITLAB_TOKEN`, `AZURE_*`): any git server must work, self-hosted
+     included. The token is sent as the basic-auth password with a neutral
+     username.
 3. On successful HTTPS authentication, the engine offers (never forces)
    saving the token to the OS keychain for future sessions.
 4. When authentication is required but unavailable, sync fails with a typed

@@ -15,6 +15,10 @@ use crate::credentials::{
     is_https_remote, lookup_keychain_token, resolve_credentials, ResolvedCredential,
 };
 
+/// Neutral basic-auth username for HTTPS token auth (ADR 0010): servers
+/// authenticate the token as password and ignore or accept any username.
+const PENNA_BASIC_AUTH_USER: &str = "penna";
+
 fn needs_callbacks(resolved: &ResolvedCredential) -> bool {
     matches!(
         resolved,
@@ -41,7 +45,7 @@ fn remote_callbacks(resolved: &ResolvedCredential) -> RemoteCallbacks<'static> {
 
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
             if let Some(token) = &token {
-                return Cred::userpass_plaintext("x-oauth-basic", token);
+                return Cred::userpass_plaintext(PENNA_BASIC_AUTH_USER, token);
             }
         }
 
@@ -539,9 +543,7 @@ impl GitEntryRepository {
             .map(ToOwned::to_owned)
             .unwrap_or_default();
 
-        let env_token = std::env::var("PENNA_GIT_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .ok();
+        let env_token = std::env::var("PENNA_GIT_TOKEN").ok();
         let keychain_token = if is_https_remote(&remote_url) {
             lookup_keychain_token(&remote_url)
         } else {

@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn ssh_url_forms_route_to_ssh_agent() {
         for url in [
-            "git@github.com:user/journal.git",
+            "git@git.example.com:user/journal.git",
             "ssh://git@host.example.com/journal.git",
             "user@server:/path/to/journal",
         ] {
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn https_urls_do_not_route_to_ssh_agent() {
-        assert!(!is_ssh_remote("https://github.com/user/journal.git"));
+        assert!(!is_ssh_remote("https://git.example.com/user/journal.git"));
         assert!(!is_ssh_remote("http://host/journal.git"));
     }
 
@@ -110,7 +110,7 @@ mod tests {
         let resolved = resolve_https_token(
             Some("  env-token  "),
             Some("stored-token".to_string()),
-            "https://github.com/u/j.git",
+            "https://git.example.com/u/journal.git",
         )
         .unwrap();
 
@@ -126,7 +126,7 @@ mod tests {
         let resolved = resolve_https_token(
             Some("   "),
             Some("stored-token".to_string()),
-            "https://github.com/u/j.git",
+            "https://git.example.com/u/journal.git",
         )
         .unwrap();
 
@@ -135,11 +135,11 @@ mod tests {
 
     #[test]
     fn missing_everything_yields_auth_required_with_remote_url() {
-        let err = resolve_https_token(None, None, "https://github.com/u/j.git").unwrap_err();
+        let err = resolve_https_token(None, None, "https://git.example.com/u/journal.git").unwrap_err();
 
         match err {
             RepositoryError::AuthRequired(url) => {
-                assert_eq!(url, "https://github.com/u/j.git")
+                assert_eq!(url, "https://git.example.com/u/journal.git")
             }
             other => panic!("expected AuthRequired, got {:?}", other),
         }
