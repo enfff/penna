@@ -464,8 +464,7 @@ impl GitEntryRepository {
             || name == ".."
         {
             return Err(RepositoryError::Storage(format!(
-                "invalid attachment name: {}",
-                name
+                "invalid attachment name: {name}"
             )));
         }
         Ok(PathBuf::from(format!("{id}/{name}")))
@@ -687,8 +686,7 @@ impl GitEntryRepository {
             Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(SyncResult::NoRemote),
             Err(e) => {
                 return Err(RepositoryError::Storage(format!(
-                    "Failed to find origin remote: {}",
-                    e
+                    "Failed to find origin remote: {e}"
                 )))
             }
         };
@@ -721,7 +719,7 @@ impl GitEntryRepository {
             .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {e}")))?
             .id();
 
-        let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
+        let fetch_refspec = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
         let mut fetch_opts = git2::FetchOptions::new();
         if needs_callbacks(&resolved) {
             fetch_opts.remote_callbacks(remote_callbacks(&resolved));
@@ -746,7 +744,7 @@ impl GitEntryRepository {
                     return Ok(SyncResult::UpToDate { branch });
                 }
 
-                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                let push_refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
                 let mut push_opts = git2::PushOptions::new();
                 if needs_callbacks(&resolved) {
                     push_opts.remote_callbacks(remote_callbacks(&resolved));
@@ -758,8 +756,7 @@ impl GitEntryRepository {
                             RepositoryError::AuthRequired(remote_url.clone())
                         } else {
                             RepositoryError::Storage(format!(
-                                "Failed to push branch to remote: {}",
-                                err
+                                "Failed to push branch to remote: {err}"
                             ))
                         }
                     })?;
@@ -767,8 +764,7 @@ impl GitEntryRepository {
             }
             Err(e) => {
                 return Err(RepositoryError::Storage(format!(
-                    "Failed to read remote tracking branch: {}",
-                    e
+                    "Failed to read remote tracking branch: {e}"
                 )))
             }
         };
@@ -838,7 +834,7 @@ impl GitEntryRepository {
                     });
                 }
 
-                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                let push_refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
                 let mut push_opts = git2::PushOptions::new();
                 if needs_callbacks(&resolved) {
                     push_opts.remote_callbacks(remote_callbacks(&resolved));
@@ -875,7 +871,7 @@ impl GitEntryRepository {
                     return Ok(SyncResult::Pulled { branch });
                 }
 
-                let push_refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+                let push_refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
                 let mut push_opts = git2::PushOptions::new();
                 if needs_callbacks(&resolved) {
                     push_opts.remote_callbacks(remote_callbacks(&resolved));
@@ -1866,8 +1862,7 @@ mod tests {
         for stamp in [&loaded.created_at, &loaded.updated_at] {
             assert!(
                 chrono::DateTime::parse_from_rfc3339(stamp).is_ok(),
-                "timestamp {} is not RFC3339",
-                stamp
+                "timestamp {stamp} is not RFC3339"
             );
         }
 
@@ -1943,7 +1938,7 @@ mod tests {
 
         let branch = match result {
             SyncResult::Pushed { branch } => branch,
-            other => panic!("expected pushed sync result, got {:?}", other),
+            other => panic!("expected pushed sync result, got {other:?}"),
         };
 
         let remote_repo = Repository::open_bare(remote_dir.path()).unwrap();
@@ -1990,7 +1985,7 @@ mod tests {
         let result = repo_b.sync().unwrap();
         match result {
             SyncResult::Pulled { .. } => {}
-            other => panic!("expected pulled sync result, got {:?}", other),
+            other => panic!("expected pulled sync result, got {other:?}"),
         }
 
         let pulled = repo_b.get("202608091511").unwrap();

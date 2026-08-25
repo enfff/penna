@@ -52,9 +52,7 @@ fn every_variant_maps_inside_the_closed_code_set() {
         let code = error.code();
         assert!(
             PUBLIC_ERROR_CODES.contains(&code),
-            "variant {} maps to code {} which is outside the closed set (ADR 0009)",
-            variant,
-            code
+            "variant {variant} maps to code {code} which is outside the closed set (ADR 0009)"
         );
     }
 }

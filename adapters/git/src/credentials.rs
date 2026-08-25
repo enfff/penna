@@ -77,7 +77,7 @@ mod tests {
             "user@server:/path/to/journal",
         ] {
             let resolved = resolve_credentials(url, None, None).unwrap();
-            assert_eq!(resolved, ResolvedCredential::SshAgent, "url: {}", url);
+            assert_eq!(resolved, ResolvedCredential::SshAgent, "url: {url}");
         }
     }
 
@@ -93,8 +93,7 @@ mod tests {
             assert_eq!(
                 resolved,
                 ResolvedCredential::NoCredential,
-                "url: {}",
-                url
+                "url: {url}"
             );
         }
     }
@@ -141,7 +140,7 @@ mod tests {
             RepositoryError::AuthRequired(url) => {
                 assert_eq!(url, "https://git.example.com/u/journal.git")
             }
-            other => panic!("expected AuthRequired, got {:?}", other),
+            other => panic!("expected AuthRequired, got {other:?}"),
         }
     }
 }

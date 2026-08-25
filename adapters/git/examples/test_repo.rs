@@ -6,7 +6,7 @@ use std::path::PathBuf;
 fn main() {
     let journal_path = PathBuf::from("/home/enf/Projects/penna-myjournal");
     
-    println!("Opening git repository at: {:?}", journal_path);
+    println!("Opening git repository at: {journal_path:?}");
     
     match GitEntryRepository::new(journal_path.clone()) {
         Ok(repo) => {
@@ -21,7 +21,7 @@ fn main() {
                         println!("  - {} (ID: {})", entry.title, entry.id.0);
                     }
                 }
-                Err(e) => println!("✗ Failed to list entries: {:?}", e),
+                Err(e) => println!("✗ Failed to list entries: {e:?}"),
             }
             
             // Test create
@@ -37,7 +37,7 @@ fn main() {
             
             match repo.save(&new_entry) {
                 Ok(_) => println!("✓ Successfully created entry"),
-                Err(e) => println!("✗ Failed to save entry: {:?}", e),
+                Err(e) => println!("✗ Failed to save entry: {e:?}"),
             }
             
             // Test get
@@ -50,7 +50,7 @@ fn main() {
                     println!("  Tags: {:?}", entry.tags);
                 }
                 Ok(None) => println!("✗ Entry not found"),
-                Err(e) => println!("✗ Failed to get entry: {:?}", e),
+                Err(e) => println!("✗ Failed to get entry: {e:?}"),
             }
             
             // Test update
@@ -61,14 +61,14 @@ fn main() {
             
             match repo.save(&updated_entry) {
                 Ok(_) => println!("✓ Successfully updated entry"),
-                Err(e) => println!("✗ Failed to update entry: {:?}", e),
+                Err(e) => println!("✗ Failed to update entry: {e:?}"),
             }
             
             // Test delete
             println!("\n--- Deleting entry ---");
             match repo.delete("test-entry-1") {
                 Ok(_) => println!("✓ Successfully deleted entry"),
-                Err(e) => println!("✗ Failed to delete entry: {:?}", e),
+                Err(e) => println!("✗ Failed to delete entry: {e:?}"),
             }
             
             // Verify deletion
@@ -76,11 +76,11 @@ fn main() {
             match repo.get("test-entry-1") {
                 Ok(None) => println!("✓ Entry successfully deleted (not found)"),
                 Ok(Some(_)) => println!("✗ Entry still exists"),
-                Err(e) => println!("✗ Error checking: {:?}", e),
+                Err(e) => println!("✗ Error checking: {e:?}"),
             }
         }
         Err(e) => {
-            println!("✗ Failed to open repository: {:?}", e);
+            println!("✗ Failed to open repository: {e:?}");
             std::process::exit(1);
         }
     }

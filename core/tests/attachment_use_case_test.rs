@@ -91,8 +91,7 @@ fn add_rejects_traversal_and_separator_names() {
             .expect_err("must reject unsafe name");
         assert!(
             matches!(err, AddAttachmentError::InvalidName(_)),
-            "name {} not rejected as invalid",
-            bad
+            "name {bad} not rejected as invalid",
         );
     }
 }

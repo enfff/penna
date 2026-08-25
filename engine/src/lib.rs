@@ -55,8 +55,7 @@ impl From<AddAttachmentError> for EngineError {
                 EngineError::Validation(format!("invalid attachment name: {name}"))
             }
             AddAttachmentError::TooLarge { size, max } => EngineError::Validation(format!(
-                "attachment of {} bytes exceeds the {} byte limit",
-                size, max
+                "attachment of {size} bytes exceeds the {max} byte limit"
             )),
             AddAttachmentError::NotFound(id) => EngineError::Repo(RepositoryError::NotFound(id)),
             AddAttachmentError::Repository(err) => EngineError::from(err),
@@ -118,16 +117,16 @@ impl EngineError {
         match self {
             EngineError::Io(msg) => msg.clone(),
             EngineError::NotConnected(msg) => msg.clone(),
-            EngineError::Repo(err) => format!("{:?}", err),
+            EngineError::Repo(err) => format!("{err:?}"),
             EngineError::CredentialsRequired { remote_url } => {
                 format!("authentication required for remote {remote_url}")
             }
             EngineError::Validation(msg) => msg.clone(),
-            EngineError::Create(err) => format!("{:?}", err),
-            EngineError::Update(err) => format!("{:?}", err),
-            EngineError::AddTag(err) => format!("{:?}", err),
-            EngineError::RemoveTag(err) => format!("{:?}", err),
-            EngineError::UpdateTag(err) => format!("{:?}", err),
+            EngineError::Create(err) => format!("{err:?}"),
+            EngineError::Update(err) => format!("{err:?}"),
+            EngineError::AddTag(err) => format!("{err:?}"),
+            EngineError::RemoveTag(err) => format!("{err:?}"),
+            EngineError::UpdateTag(err) => format!("{err:?}"),
             EngineError::IdCollision(msg) => msg.clone(),
         }
     }
