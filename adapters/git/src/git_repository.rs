@@ -39,7 +39,7 @@ fn remote_callbacks(resolved: &ResolvedCredential) -> RemoteCallbacks<'static> {
             return Cred::ssh_key_from_agent(user).map_err(|e| git2::Error::new(
                 git2::ErrorCode::Auth,
                 git2::ErrorClass::Ssh,
-                format!("ssh-agent has no key for {}: {}", url, e),
+                format!("ssh-agent has no key for {url}: {e}"),
             ));
         }
 
@@ -52,7 +52,7 @@ fn remote_callbacks(resolved: &ResolvedCredential) -> RemoteCallbacks<'static> {
         Err(git2::Error::new(
             git2::ErrorCode::Auth,
             git2::ErrorClass::Http,
-            format!("no credential available for {}", url),
+            format!("no credential available for {url}"),
         ))
     });
     callbacks
@@ -119,10 +119,10 @@ impl GitEntryRepository {
         
         let repo = if repo_path.exists() {
             Repository::open(&path)
-                .map_err(|e| RepositoryError::Storage(format!("Failed to open git repo: {}", e)))?
+                .map_err(|e| RepositoryError::Storage(format!("Failed to open git repo: {e}")))?
         } else {
             Repository::init(&path)
-                .map_err(|e| RepositoryError::Storage(format!("Failed to init git repo: {}", e)))?
+                .map_err(|e| RepositoryError::Storage(format!("Failed to init git repo: {e}")))?
         };
 
         Ok(Self {
@@ -162,7 +162,7 @@ impl GitEntryRepository {
 
         let is_dirty = !repo
             .statuses(None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get repo status: {}", e)))?
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get repo status: {e}")))?
             .is_empty();
 
         let merge_in_progress = repo.find_reference("MERGE_HEAD").is_ok();
@@ -170,7 +170,7 @@ impl GitEntryRepository {
         let conflicted_paths = if merge_in_progress {
             let index = repo
                 .index()
-                .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+                .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {e}")))?;
             conflicted_paths_of(&index)
                 .into_iter()
                 .map(|p| p.to_string_lossy().into_owned())
@@ -189,7 +189,7 @@ impl GitEntryRepository {
     }
 
     fn entry_path(&self, id: &str) -> PathBuf {
-        PathBuf::from(format!("{}.md", id))
+        PathBuf::from(format!("{id}.md"))
     }
 
     fn get_head_oid(&self) -> Result<Option<git2::Oid>, RepositoryError> {
@@ -199,7 +199,7 @@ impl GitEntryRepository {
         match head {
             Ok(head) if head.is_branch() => {
                 let commit = head.peel_to_commit()
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?;
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {e}")))?;
                 Ok(Some(commit.id()))
             }
             _ => Ok(None),
@@ -209,7 +209,7 @@ impl GitEntryRepository {
 
     fn create_signature(&self) -> Result<Signature<'static>, RepositoryError> {
         Signature::now("Penna", "penna@example.com")
-            .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {}", e)))
+            .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {e}")))
     }
 
     fn format_git_time(time: git2::Time) -> String {
@@ -254,13 +254,13 @@ impl GitEntryRepository {
 
         let mut revwalk = repo
             .revwalk()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {e}")))?;
         revwalk
             .set_sorting(git2::Sort::TIME)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {e}")))?;
         revwalk
             .push_head()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {e}")))?;
 
         let mut stamps: std::collections::HashMap<String, (String, String)> =
             if cache.head_oid.is_some() {
@@ -273,7 +273,7 @@ impl GitEntryRepository {
 
         for oid in revwalk {
             let oid = oid.map_err(|e| {
-                RepositoryError::Storage(format!("Failed to read history entry: {}", e))
+                RepositoryError::Storage(format!("Failed to read history entry: {e}"))
             })?;
             if Some(oid) == cache.head_oid {
                 reached_cached_head = true;
@@ -281,7 +281,7 @@ impl GitEntryRepository {
             }
 
             let commit = repo.find_commit(oid).map_err(|e| {
-                RepositoryError::Storage(format!("Failed to find commit in history: {}", e))
+                RepositoryError::Storage(format!("Failed to find commit in history: {e}"))
             })?;
             let paths = Self::touched_entry_paths(&repo, &commit)?;
             if !paths.is_empty() {
@@ -325,17 +325,17 @@ impl GitEntryRepository {
                     .parent(0)
                     .and_then(|p| p.tree())
                     .map_err(|e| {
-                        RepositoryError::Storage(format!("Failed to get parent tree: {}", e))
+                        RepositoryError::Storage(format!("Failed to get parent tree: {e}"))
                     })?,
             ),
         };
         let tree = commit
             .tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {e}")))?;
 
         let diff = repo
             .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to diff history: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to diff history: {e}")))?;
 
         let mut paths = Vec::new();
         for delta in diff.deltas() {
@@ -362,20 +362,20 @@ impl GitEntryRepository {
 
         let mut revwalk = repo
             .revwalk()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {e}")))?;
         revwalk
             .set_sorting(git2::Sort::TIME | git2::Sort::REVERSE)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {e}")))?;
         revwalk
             .push_head()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {e}")))?;
 
         for oid in revwalk {
             let oid = oid.map_err(|e| {
-                RepositoryError::Storage(format!("Failed to read history entry: {}", e))
+                RepositoryError::Storage(format!("Failed to read history entry: {e}"))
             })?;
             let commit = repo.find_commit(oid).map_err(|e| {
-                RepositoryError::Storage(format!("Failed to find commit in history: {}", e))
+                RepositoryError::Storage(format!("Failed to find commit in history: {e}"))
             })?;
 
             for id in Self::touched_entry_paths(repo, &commit)? {
@@ -423,7 +423,7 @@ impl GitEntryRepository {
             None => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to get timestamp: {}", e)))?
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to get timestamp: {e}")))?
                     .as_millis()
                     .to_string();
                 (now.clone(), now)
@@ -449,7 +449,7 @@ impl GitEntryRepository {
     }
 
     fn entry_tags_relative_path(id: &str) -> PathBuf {
-        PathBuf::from(format!(".penna/{}.json", id))
+        PathBuf::from(format!(".penna/{id}.json"))
     }
 
     fn attachment_dir(&self, id: &str) -> PathBuf {
@@ -468,7 +468,7 @@ impl GitEntryRepository {
                 name
             )));
         }
-        Ok(PathBuf::from(format!("{}/{}", id, name)))
+        Ok(PathBuf::from(format!("{id}/{name}")))
     }
 
     fn tags_file_absolute_path(&self) -> PathBuf {
@@ -543,7 +543,7 @@ impl GitEntryRepository {
         }
 
         let content = serde_json::to_vec_pretty(sidecar).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to encode entry sidecar: {}", e))
+            RepositoryError::Storage(format!("Failed to encode entry sidecar: {e}"))
         })?;
 
         std::fs::write(&file_path, content).map_err(|e| {
@@ -582,7 +582,7 @@ impl GitEntryRepository {
         })?;
         for entry in entries {
             let path = entry.map_err(|e| {
-                RepositoryError::Storage(format!("Failed to read directory entry: {}", e))
+                RepositoryError::Storage(format!("Failed to read directory entry: {e}"))
             })?;
             let name = path.file_name().to_string_lossy().into_owned();
             if let Some(stem) = name.strip_suffix(".md")
@@ -606,11 +606,11 @@ impl GitEntryRepository {
 
         let commit = repo
             .find_commit(commit_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find commit: {e}")))?;
 
         let tree = commit
             .tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {e}")))?;
 
         for entry in tree.iter() {
             if entry.filemode() == git2::FileMode::Blob as i32 || entry.filemode() == 33188 {
@@ -643,7 +643,7 @@ impl GitEntryRepository {
         };
 
         let content = serde_json::to_vec_pretty(&payload).map_err(|e| {
-            RepositoryError::Storage(format!("Failed to encode tags payload: {}", e))
+            RepositoryError::Storage(format!("Failed to encode tags payload: {e}"))
         })?;
 
         std::fs::write(&file_path, content).map_err(|e| {
@@ -653,28 +653,28 @@ impl GitEntryRepository {
         let repo = self.repo.lock().unwrap();
         let mut index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {e}")))?;
 
         index
             .add_path(Self::tags_file_relative_path())
-            .map_err(|e| RepositoryError::Storage(format!("Failed to add tags file to index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add tags file to index: {e}")))?;
         index
             .write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {e}")))?;
 
         let tree_oid = index
             .write_tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {e}")))?;
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {e}")))?;
 
         let sig = self.create_signature()?;
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
 
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to commit tags change: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to commit tags change: {e}")))?;
 
         Ok(normalized)
     }
@@ -718,7 +718,7 @@ impl GitEntryRepository {
         let local_oid = repo
             .head()
             .and_then(|head| head.peel_to_commit())
-            .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {e}")))?
             .id();
 
         let fetch_refspec = format!("refs/heads/{0}:refs/remotes/origin/{0}", branch);
@@ -732,11 +732,11 @@ impl GitEntryRepository {
                 if e.code() == git2::ErrorCode::Auth {
                     RepositoryError::AuthRequired(remote_url.clone())
                 } else {
-                    RepositoryError::Storage(format!("Failed to fetch remote: {}", e))
+                    RepositoryError::Storage(format!("Failed to fetch remote: {e}"))
                 }
             })?;
 
-        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_ref_name = format!("refs/remotes/origin/{branch}");
         let remote_oid = match repo.find_reference(&remote_ref_name) {
             Ok(reference) => reference.target().ok_or_else(|| {
                 RepositoryError::Storage("remote tracking reference has no target".to_string())
@@ -775,7 +775,7 @@ impl GitEntryRepository {
 
         let (ahead, behind) = repo
             .graph_ahead_behind(local_oid, remote_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to compare histories: {e}")))?;
 
         if ahead == 0 && behind == 0 {
             return Ok(SyncResult::UpToDate { branch });
@@ -812,20 +812,20 @@ impl GitEntryRepository {
                     return Ok(SyncResult::UpToDate { branch });
                 }
 
-                let local_ref_name = format!("refs/heads/{}", branch);
+                let local_ref_name = format!("refs/heads/{branch}");
                 let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
-                    RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
+                    RepositoryError::Storage(format!("Failed to find local branch reference: {e}"))
                 })?;
 
                 local_ref.set_target(remote_oid, "penna pull fast-forward").map_err(|e| {
-                    RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
+                    RepositoryError::Storage(format!("Failed to fast-forward branch: {e}"))
                 })?;
 
                 repo.set_head(&local_ref_name)
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {e}")))?;
 
                 repo.checkout_head(Some(CheckoutBuilder::new().force()))
-                    .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
+                    .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {e}")))?;
 
                 Ok(SyncResult::Pulled { branch })
             }
@@ -849,7 +849,7 @@ impl GitEntryRepository {
                         if e.code() == git2::ErrorCode::Auth {
                             RepositoryError::AuthRequired(remote_url.clone())
                         } else {
-                            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                            RepositoryError::Storage(format!("Failed to push local commits: {e}"))
                         }
                     })?;
 
@@ -857,20 +857,20 @@ impl GitEntryRepository {
             }
             SyncMode::Smart => {
                 if behind > 0 {
-                    let local_ref_name = format!("refs/heads/{}", branch);
+                    let local_ref_name = format!("refs/heads/{branch}");
                     let mut local_ref = repo.find_reference(&local_ref_name).map_err(|e| {
-                        RepositoryError::Storage(format!("Failed to find local branch reference: {}", e))
+                        RepositoryError::Storage(format!("Failed to find local branch reference: {e}"))
                     })?;
 
                     local_ref.set_target(remote_oid, "penna sync fast-forward").map_err(|e| {
-                        RepositoryError::Storage(format!("Failed to fast-forward branch: {}", e))
+                        RepositoryError::Storage(format!("Failed to fast-forward branch: {e}"))
                     })?;
 
                     repo.set_head(&local_ref_name)
-                        .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {}", e)))?;
+                        .map_err(|e| RepositoryError::Storage(format!("Failed to set HEAD: {e}")))?;
 
                     repo.checkout_head(Some(CheckoutBuilder::new().force()))
-                        .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {}", e)))?;
+                        .map_err(|e| RepositoryError::Storage(format!("Failed to checkout updated HEAD: {e}")))?;
 
                     return Ok(SyncResult::Pulled { branch });
                 }
@@ -886,7 +886,7 @@ impl GitEntryRepository {
                         if e.code() == git2::ErrorCode::Auth {
                             RepositoryError::AuthRequired(remote_url.clone())
                         } else {
-                            RepositoryError::Storage(format!("Failed to push local commits: {}", e))
+                            RepositoryError::Storage(format!("Failed to push local commits: {e}"))
                         }
                     })?;
 
@@ -915,7 +915,7 @@ impl JournalPath for GitEntryRepository {
     fn resolve_path(&self) -> Result<PathBuf, RepositoryError> {
         self.root
             .canonicalize()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to canonicalize repo path: {}", e)))
+            .map_err(|e| RepositoryError::Storage(format!("Failed to canonicalize repo path: {e}")))
     }
 }
 
@@ -929,13 +929,13 @@ impl TagCatalog for GitEntryRepository {
         if !tags.iter().any(|t| t == tag) {
             tags.push(tag.to_string());
         }
-        self.write_tags_to_disk_and_commit(tags, &format!("Add tag {}", tag))
+        self.write_tags_to_disk_and_commit(tags, &format!("Add tag {tag}"))
     }
 
     fn remove_tag(&self, tag: &str) -> Result<Vec<String>, RepositoryError> {
         let mut tags = self.read_tags_from_disk()?;
         tags.retain(|t| t != tag);
-        let updated = self.write_tags_to_disk_and_commit(tags, &format!("Remove tag {}", tag))?;
+        let updated = self.write_tags_to_disk_and_commit(tags, &format!("Remove tag {tag}"))?;
 
         for id in self.list_entry_ids_from_head()? {
             let mut entry_tags = self.read_entry_tags_from_disk(&id)?;
@@ -955,7 +955,7 @@ impl TagCatalog for GitEntryRepository {
         tags[position] = new_tag.to_string();
         let updated = self.write_tags_to_disk_and_commit(
             tags,
-            &format!("Rename tag {} to {}", old_tag, new_tag),
+            &format!("Rename tag {old_tag} to {new_tag}"),
         )?;
 
         for id in self.list_entry_ids_from_head()? {
@@ -1018,17 +1018,17 @@ impl EntryRepository for GitEntryRepository {
         let repo = self.repo.lock().unwrap();
         let mut index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {e}")))?;
 
         index
             .add_path(&entry_path)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to add entry to index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add entry to index: {e}")))?;
         index
             .add_path(&Self::entry_tags_relative_path(&entry.id.0))
-            .map_err(|e| RepositoryError::Storage(format!("Failed to add sidecar to index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to add sidecar to index: {e}")))?;
         index
             .write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {e}")))?;
 
         if merge_head_oid(&repo)?.is_some() {
             // Mid-merge (ADR 0014): staging registers the resolution; the
@@ -1038,10 +1038,10 @@ impl EntryRepository for GitEntryRepository {
 
         let tree_oid = index
             .write_tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {e}")))?;
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {e}")))?;
 
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
@@ -1054,7 +1054,7 @@ impl EntryRepository for GitEntryRepository {
             &tree,
             &parents,
         )
-        .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {e}")))?;
 
         Ok(())
     }
@@ -1100,20 +1100,20 @@ impl EntryRepository for GitEntryRepository {
         let sig = self.create_signature()?;
         let mut index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {e}")))?;
 
         index
             .remove_path(&entry_path)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to remove entry from index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to remove entry from index: {e}")))?;
 
         if attachment_dir.exists() || index.get_path(&PathBuf::from(id), 0).is_some() {
-            let spec = format!("{}/*", id);
+            let spec = format!("{id}/*");
             let _ = index.remove_all([&spec], None);
         }
 
         if self.root.join(&entry_tags_path).exists() {
             index.remove_path(&entry_tags_path).map_err(|e| {
-                RepositoryError::Storage(format!("Failed to remove sidecar from index: {}", e))
+                RepositoryError::Storage(format!("Failed to remove sidecar from index: {e}"))
             })?;
         } else {
             let _ = index.remove_path(&entry_tags_path);
@@ -1121,7 +1121,7 @@ impl EntryRepository for GitEntryRepository {
 
         index
             .write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {e}")))?;
 
         if merge_head_oid(&repo)?.is_some() {
             // Mid-merge (ADR 0014): stage the deletion, conclude later.
@@ -1130,10 +1130,10 @@ impl EntryRepository for GitEntryRepository {
 
         let tree_oid = index
             .write_tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {e}")))?;
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {e}")))?;
 
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
@@ -1142,11 +1142,11 @@ impl EntryRepository for GitEntryRepository {
             Some("HEAD"),
             &sig,
             &sig,
-            &format!("Delete entry {}", id),
+            &format!("Delete entry {id}"),
             &tree,
             &parents,
         )
-        .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {e}")))?;
 
         Ok(())
     }
@@ -1240,7 +1240,7 @@ impl AttachmentStore for GitEntryRepository {
 
         self.commit_paths(
             &[relative, Self::entry_tags_relative_path(id)],
-            &format!("Add attachment {} to {}", name, id),
+            &format!("Add attachment {name} to {id}"),
         )?;
 
         Ok(AttachmentMeta {
@@ -1279,7 +1279,7 @@ impl AttachmentStore for GitEntryRepository {
         self.commit_staged(
             &[Self::entry_tags_relative_path(id)],
             &[relative],
-            &format!("Remove attachment {} from {}", name, id),
+            &format!("Remove attachment {name} from {id}"),
         )?;
 
         Ok(sidecar.attachments)
@@ -1302,7 +1302,7 @@ impl GitEntryRepository {
             ))
         })? {
             let entry = file.map_err(|e| {
-                RepositoryError::Storage(format!("Failed to read directory entry: {}", e))
+                RepositoryError::Storage(format!("Failed to read directory entry: {e}"))
             })?;
             let meta = entry.metadata().map_err(|e| {
                 RepositoryError::Storage(format!("Failed to stat {}: {}", entry.path().display(), e))
@@ -1335,7 +1335,7 @@ impl GitEntryRepository {
         let repo = self.repo.lock().unwrap();
         let mut index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to open git index: {e}")))?;
 
         for path in adds {
             index.add_path(path).map_err(|e| {
@@ -1347,21 +1347,21 @@ impl GitEntryRepository {
         }
         index
             .write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git index: {e}")))?;
 
         let tree_oid = index
             .write_tree()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write git tree: {e}")))?;
         let tree = repo
             .find_tree(tree_oid)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to find git tree: {e}")))?;
 
         let sig = self.create_signature()?;
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit> = parent.as_ref().map_or_else(Vec::new, |p| vec![p]);
 
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-            .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to commit: {e}")))?;
 
         Ok(())
     }
@@ -1388,7 +1388,7 @@ impl ConflictView for GitEntryRepository {
         let repo = self.repo.lock().unwrap();
         let index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {e}")))?;
         if !index.has_conflicts() {
             return Ok(Vec::new());
         }
@@ -1407,7 +1407,7 @@ impl ConflictView for GitEntryRepository {
         let repo = self.repo.lock().unwrap();
         let index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {e}")))?;
         if !index.has_conflicts() {
             return Ok(None);
         }
@@ -1465,7 +1465,7 @@ fn conclude_merge_locked(
 
     let mut index = repo
         .index()
-        .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {e}")))?;
     if index.has_conflicts() {
         return Ok(MergeConclusion::StillConflicted(
             conflicted_paths_of(&index)
@@ -1477,10 +1477,10 @@ fn conclude_merge_locked(
 
     let tree_oid = index
         .write_tree_to(repo)
-        .map_err(|e| RepositoryError::Storage(format!("Failed to write merge tree: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to write merge tree: {e}")))?;
     let tree = repo
         .find_tree(tree_oid)
-        .map_err(|e| RepositoryError::Storage(format!("Failed to find merge tree: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to find merge tree: {e}")))?;
 
     let branch = repo
         .head()
@@ -1490,24 +1490,24 @@ fn conclude_merge_locked(
     let ours = repo
         .head()
         .and_then(|h| h.peel_to_commit())
-        .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to get head commit: {e}")))?;
     let merge_head_oid = merge_head_oid(repo)?.expect("checked above");
     let merge_head = repo.find_commit(merge_head_oid).map_err(|e| {
-        RepositoryError::Storage(format!("Failed to find MERGE_HEAD commit: {}", e))
+        RepositoryError::Storage(format!("Failed to find MERGE_HEAD commit: {e}"))
     })?;
 
     let sig = Signature::now("Penna", "penna@example.com")
-        .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to create signature: {e}")))?;
 
     repo.commit(
-        Some(&format!("refs/heads/{}", branch)),
+        Some(&format!("refs/heads/{branch}")),
         &sig,
         &sig,
         "Reconcile journal divergence",
         &tree,
         &[&ours, &merge_head],
     )
-    .map_err(|e| RepositoryError::Storage(format!("Failed to commit merge: {}", e)))?;
+    .map_err(|e| RepositoryError::Storage(format!("Failed to commit merge: {e}")))?;
 
     if let Ok(mut merge_head_ref) = repo.find_reference("MERGE_HEAD") {
         let _ = merge_head_ref.delete();
@@ -1518,7 +1518,7 @@ fn conclude_merge_locked(
 
     repo.checkout_head(Some(CheckoutBuilder::new().force()))
         .map_err(|e| {
-            RepositoryError::Storage(format!("Failed to refresh working tree: {}", e))
+            RepositoryError::Storage(format!("Failed to refresh working tree: {e}"))
         })?;
 
     Ok(MergeConclusion::Concluded)
@@ -1534,33 +1534,33 @@ impl GitEntryRepository {
 
         let mut config = repo
             .config()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to read config: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read config: {e}")))?;
         config
             .set_str("merge.conflictStyle", "merge")
-            .map_err(|e| RepositoryError::Storage(format!("Failed to pin conflict style: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to pin conflict style: {e}")))?;
 
         let branch = repo
             .head()
             .ok()
             .and_then(|h| h.shorthand().map(ToOwned::to_owned))
             .ok_or_else(|| RepositoryError::Storage("failed to resolve branch".to_string()))?;
-        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_ref_name = format!("refs/remotes/origin/{branch}");
         let remote_ref = repo
             .find_reference(&remote_ref_name)
             .map_err(|e| {
-                RepositoryError::Storage(format!("Failed to find remote branch: {}", e))
+                RepositoryError::Storage(format!("Failed to find remote branch: {e}"))
             })?;
         let annotated = repo
             .reference_to_annotated_commit(&remote_ref)
             .map_err(|e| {
-                RepositoryError::Storage(format!("Failed to resolve remote commit: {}", e))
+                RepositoryError::Storage(format!("Failed to resolve remote commit: {e}"))
             })?;
 
         let mut merge_opts = git2::MergeOptions::new();
         let mut checkout = CheckoutBuilder::new();
         checkout.allow_conflicts(true);
         repo.merge(&[&annotated], Some(&mut merge_opts), Some(&mut checkout))
-            .map_err(|e| RepositoryError::Storage(format!("Failed to merge remote: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to merge remote: {e}")))?;
 
         Ok(())
     }
@@ -1570,7 +1570,7 @@ impl GitEntryRepository {
     fn apply_merge_policies_locked(&self, repo: &git2::Repository) -> Result<(), RepositoryError> {
         let mut index = repo
             .index()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to read index: {e}")))?;
         if !index.has_conflicts() {
             return Ok(());
         }
@@ -1644,7 +1644,7 @@ impl GitEntryRepository {
 
         index
             .write()
-            .map_err(|e| RepositoryError::Storage(format!("Failed to write index: {}", e)))?;
+            .map_err(|e| RepositoryError::Storage(format!("Failed to write index: {e}")))?;
 
         Ok(())
     }
@@ -1683,7 +1683,7 @@ fn union_stage_tags(
     tags.dedup();
 
     serde_json::to_string_pretty(&TagsCatalogFile { tags })
-        .map_err(|e| RepositoryError::Storage(format!("Failed to encode merged tag file: {}", e)))
+        .map_err(|e| RepositoryError::Storage(format!("Failed to encode merged tag file: {e}")))
 }
 
 
@@ -1947,7 +1947,7 @@ mod tests {
         };
 
         let remote_repo = Repository::open_bare(remote_dir.path()).unwrap();
-        let remote_ref = format!("refs/heads/{}", branch);
+        let remote_ref = format!("refs/heads/{branch}");
         assert!(remote_repo.find_reference(&remote_ref).is_ok());
     }
 
@@ -2213,7 +2213,7 @@ mod tests {
 
         let work_file = _tmp_a.path().join("202608250800.md");
         let content = std::fs::read_to_string(&work_file).unwrap();
-        assert!(content.contains("<<<<<<<"), "markers must appear: {}", content);
+        assert!(content.contains("<<<<<<<"), "markers must appear: {content}");
         assert!(content.contains(">>>>>>>"));
         assert!(content.contains("Machine A text"));
         assert!(content.contains("Machine B text"));

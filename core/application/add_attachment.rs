@@ -49,7 +49,7 @@ pub fn validate_attachment_name(name: &str) -> Result<(), String> {
         return Err(format!("invalid attachment name length: {}", name.len()));
     }
     if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
-        return Err(format!("attachment name must be a plain file name: {}", name));
+        return Err(format!("attachment name must be a plain file name: {name}"));
     }
     Ok(())
 }

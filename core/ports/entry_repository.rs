@@ -80,8 +80,8 @@ pub enum FileSystemError {
 impl fmt::Display for FileSystemError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FileSystemError::Io(msg) => write!(f, "IO error: {}", msg),
-            FileSystemError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            FileSystemError::Io(msg) => write!(f, "IO error: {msg}"),
+            FileSystemError::NotFound(msg) => write!(f, "Not found: {msg}"),
         }
     }
 }

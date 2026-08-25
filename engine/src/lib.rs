@@ -52,7 +52,7 @@ impl From<AddAttachmentError> for EngineError {
     fn from(value: AddAttachmentError) -> Self {
         match value {
             AddAttachmentError::InvalidName(name) => {
-                EngineError::Validation(format!("invalid attachment name: {}", name))
+                EngineError::Validation(format!("invalid attachment name: {name}"))
             }
             AddAttachmentError::TooLarge { size, max } => EngineError::Validation(format!(
                 "attachment of {} bytes exceeds the {} byte limit",
@@ -120,7 +120,7 @@ impl EngineError {
             EngineError::NotConnected(msg) => msg.clone(),
             EngineError::Repo(err) => format!("{:?}", err),
             EngineError::CredentialsRequired { remote_url } => {
-                format!("authentication required for remote {}", remote_url)
+                format!("authentication required for remote {remote_url}")
             }
             EngineError::Validation(msg) => msg.clone(),
             EngineError::Create(err) => format!("{:?}", err),
@@ -352,7 +352,7 @@ impl PennaEngine {
     pub fn connect_journal<P: AsRef<Path>>(&self, repo_path: P) -> Result<JournalSession, EngineError> {
         let repo_path = repo_path.as_ref().to_path_buf();
         fs::create_dir_all(&repo_path)
-            .map_err(|e| EngineError::Io(format!("failed to create repo directory: {}", e)))?;
+            .map_err(|e| EngineError::Io(format!("failed to create repo directory: {e}")))?;
 
         let repo = GitEntryRepository::new(repo_path.clone()).map_err(EngineError::from)?;
         self.register_session(repo_path, repo)
@@ -361,7 +361,7 @@ impl PennaEngine {
     pub fn clone_journal(&self, request: CloneJournalRequest) -> Result<JournalSession, EngineError> {
         let parent_dir = PathBuf::from(&request.local_parent_dir);
         fs::create_dir_all(&parent_dir)
-            .map_err(|e| EngineError::Io(format!("failed to create parent directory: {}", e)))?;
+            .map_err(|e| EngineError::Io(format!("failed to create parent directory: {e}")))?;
 
         let repo_path = parent_dir.join(&request.directory_name);
         let use_case = CloneJournalUseCase::new(GitJournalCloner);

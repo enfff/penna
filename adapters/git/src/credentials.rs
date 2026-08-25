@@ -58,11 +58,11 @@ pub fn lookup_keychain_token(remote_url: &str) -> Option<String> {
 
 pub fn store_keychain_token(remote_url: &str, token: &str) -> Result<(), RepositoryError> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, remote_url)
-        .map_err(|e| RepositoryError::Storage(format!("Failed to open keychain entry: {}", e)))?;
+        .map_err(|e| RepositoryError::Storage(format!("Failed to open keychain entry: {e}")))?;
 
     entry
         .set_password(token)
-        .map_err(|e| RepositoryError::Storage(format!("Failed to store token in keychain: {}", e)))
+        .map_err(|e| RepositoryError::Storage(format!("Failed to store token in keychain: {e}")))
 }
 
 #[cfg(test)]

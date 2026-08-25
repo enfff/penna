@@ -17,7 +17,7 @@ impl<F: FileSystem> FileEntryRepository<F> {
     }
 
     fn entry_path(&self, id: &str) -> PathBuf {
-        PathBuf::from(format!("{}.md", id))
+        PathBuf::from(format!("{id}.md"))
     }
 
     fn parse_filename(filename: &str) -> Option<String> {

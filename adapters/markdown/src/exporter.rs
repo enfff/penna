@@ -55,7 +55,7 @@ fn render_markdown(document: &Document, frontmatter: Option<&str>) -> String {
     if let Some(fm) = frontmatter {
         let fm = fm.trim();
         if !fm.is_empty() {
-            return format!("---\n{}\n---\n\n{}", fm, body);
+            return format!("---\n{fm}\n---\n\n{body}");
         }
     }
 

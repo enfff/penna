@@ -79,8 +79,8 @@ fn classification_matches_adr_0009_buckets() {
             .iter()
             .find(|(name, _)| *name == variant)
             .map(|(_, bucket)| *bucket)
-            .unwrap_or_else(|| panic!("variant {} missing from expectation table", variant));
-        assert_eq!(code, bucket, "variant {} misclassified", variant);
+            .unwrap_or_else(|| panic!("variant {variant} missing from expectation table"));
+        assert_eq!(code, bucket, "variant {variant} misclassified");
     }
 }
 
