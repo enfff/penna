@@ -20,6 +20,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install libdbus (keyring sync-secret-service backend)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev
+
       - name: Test
         run: cargo test --workspace --locked
 

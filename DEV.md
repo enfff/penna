@@ -6,6 +6,9 @@ Practical day-to-day guide for working on Penna. For rules, see `AGENTS.md`,
 ## Prerequisites
 
 - Rust toolchain 1.88+ (workspace uses edition 2024)
+- Linux builds need the dbus client library headers for the OS keychain
+  (`sudo apt install libdbus-1-dev pkg-config`, `dbus-devel` on Fedora);
+  macOS and Windows use their native keychains with no extra packages
 - Git (no direct git usage outside `adapters/git`)
 - Optional for agents: [opencode](https://opencode.ai) (`AGENTS.md` at the repo
   root is loaded automatically)

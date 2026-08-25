@@ -60,5 +60,9 @@ no accounts, and nothing sensitive written where the user did not put it.
 
 - Keychain behavior varies per platform; needs integration tests on all
   three OS targets.
+- Building on headless Linux requires `libdbus-1-dev` (the chosen
+  `sync-secret-service` backend links the C dbus client). Migrating to
+  the pure-Rust zbus backend remains an option if containerized engine
+  builds ever matter.
 - Users without ssh-agent or writable keychain must supply env vars or a
   per-session prompt every time.
