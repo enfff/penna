@@ -1,245 +1,97 @@
 # Engine API Copy/Paste
 
-Use this as single source for frontend integration.
+Mirror of the current `penna-engine` public methods. The narrative
+contract lives in [ENGINE_API.md](./ENGINE_API.md); this file exists so
+frontend code can paste exact signatures. Update both in the same change.
 
 ## Rust Methods
 
 ```rust
 pub fn connect_journal<P: AsRef<std::path::Path>>(&self, repo_path: P) -> Result<JournalSession, EngineError>;
+pub fn clone_journal(&self, request: CloneJournalRequest) -> Result<JournalSession, EngineError>;
+pub fn resolve_journal_path(&self, session_id: &str) -> Result<ResolveJournalPathResponse, EngineError>;
 pub fn journal_status(&self, session_id: &str) -> Result<JournalStatus, EngineError>;
 pub fn disconnect_journal(&self, session_id: &str) -> Result<(), EngineError>;
+
 pub fn list_entries(&self, session_id: &str) -> Result<Vec<Entry>, EngineError>;
 pub fn get_entry(&self, session_id: &str, id: &str) -> Result<Option<Entry>, EngineError>;
 pub fn create_entry(&self, session_id: &str, request: CreateEntryRequest) -> Result<Entry, EngineError>;
 pub fn create_entry_api(&self, request: CreateEntryApiRequest) -> Result<EntryDto, EngineError>;
 pub fn update_entry(&self, session_id: &str, request: UpdateEntryRequest) -> Result<Entry, EngineError>;
 pub fn delete_entry(&self, session_id: &str, id: &str) -> Result<(), EngineError>;
+
+// Network I/O — call from a worker thread (ADR 0014 + ENGINE_API.md).
 pub fn sync_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+pub fn push_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+
+// Conflict flow (ADR 0014): markers land in working files; these are helpers.
+pub fn get_entry_conflict(&self, session_id: &str, id: &str) -> Result<Option<EntryConflict>, EngineError>;
+pub fn resolve_entry_conflict(&self, session_id: &str, id: &str, resolved_body: &str) -> Result<Entry, EngineError>;
+pub fn reconcile_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
+
+// Attachments (ADR 0012). Names must be plain file names; cap 32 MiB.
+pub fn add_attachment(&self, session_id: &str, entry_id: &str, name: &str, data: Vec<u8>) -> Result<AttachmentMeta, EngineError>;
+pub fn get_attachment(&self, session_id: &str, entry_id: &str, name: &str) -> Result<Option<Vec<u8>>, EngineError>;
+pub fn list_attachments(&self, session_id: &str, entry_id: &str) -> Result<Vec<AttachmentMeta>, EngineError>;
+pub fn remove_attachment(&self, session_id: &str, entry_id: &str, name: &str) -> Result<Vec<AttachmentMeta>, EngineError>;
+
 pub fn list_tags(&self, session_id: &str) -> Result<Vec<String>, EngineError>;
 pub fn add_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn remove_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn update_tag(&self, session_id: &str, old_tag: &str, new_tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
-pub fn clone_journal(&self, request: CloneJournalRequest) -> Result<JournalSession, EngineError>;
-pub fn resolve_journal_path(&self, session_id: &str) -> Result<ResolveJournalPathResponse, EngineError>;
-pub fn pull_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
-pub fn push_journal(&self, session_id: &str) -> Result<SyncReport, EngineError>;
 ```
 
-## Planned Tags Sidecar Contract (v1)
-
-No new engine methods required for frontend tag CRUD.
-Frontend keeps using existing entry APIs with `tags` field.
-
-Storage target (adapter-level):
-
-- Entry body: `YYYYMMDDHHmm.md`
-- Entry tags sidecar: `.penna/YYYYMMDDHHmm.json`
-
-Sidecar JSON target shape:
-
-```json
-{
-  "tags": ["work", "idea"]
-}
-```
-
-Behavior target:
-
-- `create_entry`/`update_entry`: persist `tags` into `.penna/<id>.json`.
-- `get_entry`/`list_entries`: hydrate `tags` from `.penna/<id>.json`.
-- missing sidecar: return empty tags, no hard failure.
-- malformed sidecar: return empty tags + integrity warning path via `sidecar_integrity_status`.
-
-Global tag catalog storage (implemented):
-
-- Path: `.penna/tags.json`
-- Shape:
-
-```json
-{
-  "tags": ["work", "idea"]
-}
-```
-
-Tag policy (implemented):
-
-- `remove_tag(session_id, tag)` removes selected tag from catalog and from all notes.
-- `update_tag(session_id, old_tag, new_tag)` renames selected tag in catalog and across all notes.
-
-## DTOs
+## Error Shape
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct JournalSession {
-    pub session_id: String,
-    pub repo_path: String,
-}
+pub const PUBLIC_ERROR_CODES: [&str; 5] = [
+    "NOT_CONNECTED", "IO", "REPO", "VALIDATION", "CONFLICT",
+];
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EngineErrorDto { pub code: String, pub message: String }
+```
+
+`code` is the contract; `message` is diagnostics only (ADR 0009).
+
+## Sync Report
+
+```rust
+pub struct SyncReport {
+    pub status: String,        // up_to_date | pulled | pushed | no_remote | no_branch | diverged | reconciled
+    pub branch: Option<String>,
+    pub ahead: Option<usize>,
+    pub behind: Option<usize>,
+    pub conflicts: Vec<String>, // conflicted entry ids when diverged
+}
+```
+
+## Journal Status
+
+```rust
 pub struct JournalStatus {
     pub session_id: String,
     pub repo_path: String,
     pub branch: Option<String>,
     pub head_commit: Option<String>,
     pub is_dirty: bool,
+    pub merge_in_progress: bool,
+    pub conflicted_paths: Vec<String>,
     pub connected_at: String,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CreateEntryRequest {
-    pub title: String,
-    pub body: String,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct UpdateEntryRequest {
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CreateEntryApiRequest {
-  pub session_id: String,
-  pub title: String,
-  pub body: String,
-  pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct EntryDto {
-  pub id: String,
-  pub title: String,
-  pub body: String,
-  pub tags: Vec<String>,
-  pub created_at: String,
-  pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct EngineErrorDto {
-  pub code: String,
-  pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SidecarIntegrityReport {
-  pub status: String,
-  pub expected_entry_id: Option<String>,
-  pub actual_entry_id: Option<String>,
-  pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SyncReport {
-  pub status: String,
-  pub branch: Option<String>,
-  pub ahead: Option<usize>,
-  pub behind: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CloneJournalRequest {
-  pub remote_url: String,
-  pub local_parent_dir: String,
-  pub directory_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ResolveJournalPathResponse {
-  pub repo_path: String,
-}
 ```
 
-## JSON Payloads
+## Threading
 
-```json
-{
-  "connect_journal": { "repo_path": "/path/to/journal" },
-  "journal_status": { "session_id": "session-1754733553000000000" },
-  "disconnect_journal": { "session_id": "session-1754733553000000000" },
-  "list_entries": { "session_id": "session-1754733553000000000" },
-  "get_entry": {
-    "session_id": "session-1754733553000000000",
-    "id": "202608091130"
-  },
-  "create_entry": {
-    "session_id": "session-1754733553000000000",
-    "request": {
-      "title": "New entry",
-      "body": "plain markdown",
-      "tags": ["daily"]
-    }
-  },
-  "create_entry_api": {
-    "session_id": "session-1754733553000000000",
-    "title": "New entry",
-    "body": "plain markdown",
-    "tags": ["daily"]
-  },
-  "update_entry": {
-    "session_id": "session-1754733553000000000",
-    "request": {
-      "id": "202608091130",
-      "title": "Updated",
-      "body": "updated markdown",
-      "tags": ["daily", "edited"]
-    }
-  },
-  "delete_entry": {
-    "session_id": "session-1754733553000000000",
-    "id": "202608091130"
-  },
-  "list_tags": {
-    "session_id": "session-1754733553000000000"
-  },
-  "add_tag": {
-    "session_id": "session-1754733553000000000",
-    "tag": "work"
-  },
-  "remove_tag": {
-    "session_id": "session-1754733553000000000",
-    "tag": "work"
-  },
-  "update_tag": {
-    "session_id": "session-1754733553000000000",
-    "old_tag": "work",
-    "new_tag": "deep-work"
-  },
-  "sync_journal": {
-    "session_id": "session-1754733553000000000"
-  },
-  "clone_journal": {
-    "remote_url": "https://example.com/user/journal.git",
-    "local_parent_dir": "/home/user/Documents",
-    "directory_name": "my-journal"
-  },
-  "resolve_journal_path": {
-    "session_id": "session-1754733553000000000"
-  },
-  "pull_journal": {
-    "session_id": "session-1754733553000000000"
-  },
-  "push_journal": {
-    "session_id": "session-1754733553000000000"
-  },
-  "sidecar_integrity_status": {
-    "entry_id": "202608091130",
-    "sidecar_json": "{\"tags\":[\"daily\",\"work\"]}"
-  }
-}
-```
+All calls are synchronous. Anything named sync/pull/push/clone performs
+network I/O and must run on a worker thread (see ENGINE_API.md
+"Threading Contract"). Everything else is local disk only.
 
-## Quick Real Repo Test
+## Storage Layout
 
-```bash
-cargo run -p penna-engine --example create_entry_api -- /home/enf/Projects/penna-myjournal "Test title" "Test body"
-```
-
-## File Naming Rule
-
-- Entry id and filename format: YYYYMMDDHHmm.md
-- Content format: plain markdown
+- Entry body: `<YYYYMMDDHHmm>.md` at journal root
+- Entry sidecar: `.penna/<id>.json` → `{ "tags": [...], "attachments": [{"name","bytes"}] }`
+- Global tag catalog: `.penna/tags.json`
+- Attachments: `<id>/<file>` next to the entry file (ADR 0012)
+- Conflict state: standard git markers in working files mid-merge (ADR 0014)

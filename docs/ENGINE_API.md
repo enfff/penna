@@ -224,6 +224,8 @@ Output:
   "branch": "master",
   "head_commit": "a1b2c3d4...",
   "is_dirty": false,
+  "merge_in_progress": false,
+  "conflicted_paths": [],
   "connected_at": "2026-08-09T11:17:42+00:00"
 }
 ```
@@ -256,9 +258,9 @@ Output:
 {
   "entries": [
     {
-      "id": { "0": "202608091130" },
+      "id": "202608091130",
       "title": "Entry title",
-      "body": "# Heading\n\nplain markdown",
+      "body": "plain markdown",
       "tags": ["work"],
       "created_at": "2026-08-09T11:30:00+00:00",
       "updated_at": "2026-08-09T11:30:00+00:00"
@@ -280,7 +282,7 @@ Output:
 ```json
 {
   "entry": {
-    "id": { "0": "202608091130" },
+    "id": "202608091130",
     "title": "Entry title",
     "body": "plain markdown",
     "tags": [],
@@ -380,7 +382,8 @@ Output (up to date):
   "status": "up_to_date",
   "branch": "master",
   "ahead": null,
-  "behind": null
+  "behind": null,
+  "conflicts": []
 }
 ```
 
@@ -391,7 +394,8 @@ Output (pushed):
   "status": "pushed",
   "branch": "master",
   "ahead": null,
-  "behind": null
+  "behind": null,
+  "conflicts": []
 }
 ```
 
@@ -402,7 +406,8 @@ Output (pulled):
   "status": "pulled",
   "branch": "master",
   "ahead": null,
-  "behind": null
+  "behind": null,
+  "conflicts": []
 }
 ```
 
@@ -413,7 +418,8 @@ Output (no remote):
   "status": "no_remote",
   "branch": null,
   "ahead": null,
-  "behind": null
+  "behind": null,
+  "conflicts": []
 }
 ```
 
@@ -424,7 +430,8 @@ Output (diverged):
   "status": "diverged",
   "branch": "master",
   "ahead": 2,
-  "behind": 1
+  "behind": 1,
+  "conflicts": ["202608250800"]
 }
 ```
 
@@ -574,6 +581,24 @@ When authentication is required but unavailable, sync fails with code
 `REPO` and a message naming the remote. Frontends prompt for the secret,
 may persist it to the keychain via the engine's credential store, then
 retry.
+
+## Threading Contract
+
+All methods are synchronous. Frontends must move calls onto worker
+threads; nothing here is async. What each call can block on:
+
+| Method | Blocks on |
+|--------|-----------|
+| `connect_journal`, `clone_journal` | filesystem; `clone_journal` also network |
+| `journal_status`, `resolve_journal_path` | local disk only |
+| `list_entries`, `get_entry` | local disk only (timestamp cache: first read after new commits walks them once) |
+| `create_entry`, `update_entry`, `delete_entry` | local disk only |
+| `add_attachment`, `get_attachment`, `list_attachments`, `remove_attachment` | local disk only |
+| `sync_journal`, `pull_journal`, `push_journal` | **network fetch/push** + possibly OS keychain lookup |
+| tag and sidecar-integrity methods | local disk only |
+
+Rule of thumb: anything with "sync", "pull", "push", or "clone" in the
+name does network I/O. Everything else is local.
 
 ## Error Contract
 

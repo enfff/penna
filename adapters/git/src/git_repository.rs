@@ -93,6 +93,16 @@ pub struct RepositoryStatus {
 pub struct GitEntryRepository {
     repo: Arc<Mutex<Repository>>,
     root: PathBuf,
+    /// HEAD-keyed memo of per-entry git-derived timestamps (ADR 0007).
+    /// Refreshed incrementally: only commits newer than the cached head
+    /// are walked, so refresh cost scales with new work, not history.
+    history_cache: Arc<Mutex<HistoryCache>>,
+}
+
+#[derive(Default)]
+struct HistoryCache {
+    head_oid: Option<git2::Oid>,
+    stamps: std::collections::HashMap<String, (String, String)>,
 }
 
 impl std::fmt::Debug for GitEntryRepository {
@@ -118,6 +128,7 @@ impl GitEntryRepository {
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             root: path,
+            history_cache: Arc::new(Mutex::new(HistoryCache::default())),
         })
     }
 
@@ -126,6 +137,7 @@ impl GitEntryRepository {
         Self {
             repo: Arc::new(Mutex::new(repo)),
             root,
+            history_cache: Arc::new(Mutex::new(HistoryCache::default())),
         }
     }
 
@@ -240,17 +252,144 @@ impl GitEntryRepository {
     /// created_at is the author date of the earliest commit touching
     /// `<id>.md`, updated_at of the latest. Returns None when no history
     /// exists for the entry.
+    /// Returns git-derived timestamps from the HEAD-keyed cache (ADR 0007),
+    /// refreshing it incrementally first. Absent ids (never committed)
+    /// yield None.
     fn entry_history_timestamps(
         &self,
         id: &str,
     ) -> Result<Option<(String, String)>, RepositoryError> {
-        let repo = self.repo.lock().unwrap();
+        self.refresh_history_cache()?;
+        let cache = self.history_cache.lock().unwrap();
+        Ok(cache.stamps.get(id).cloned())
+    }
 
-        if repo.head().is_err() {
-            return Ok(None);
+    /// Brings the timestamp cache up to date with HEAD. Walks only commits
+    /// newer than the cached head; a rewritten history (cached head
+    /// unreachable) triggers a full rebuild.
+    fn refresh_history_cache(&self) -> Result<(), RepositoryError> {
+        let repo = self.repo.lock().unwrap();
+        let head_oid = match repo.head() {
+            Ok(head) if head.is_branch() => match head.peel_to_commit() {
+                Ok(commit) => commit.id(),
+                Err(_) => return Ok(()),
+            },
+            _ => return Ok(()),
+        };
+
+        let mut cache = self.history_cache.lock().unwrap();
+        if cache.head_oid == Some(head_oid) {
+            return Ok(());
         }
 
-        let entry_path = self.entry_path(id);
+        let mut revwalk = repo
+            .revwalk()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {}", e)))?;
+        revwalk
+            .set_sorting(git2::Sort::TIME)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to sort history: {}", e)))?;
+        revwalk
+            .push_head()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {}", e)))?;
+
+        let mut stamps: std::collections::HashMap<String, (String, String)> =
+            if cache.head_oid.is_some() {
+                cache.stamps.clone()
+            } else {
+                std::collections::HashMap::new()
+            };
+        let mut reached_cached_head = false;
+        let mut new_touches: Vec<(git2::Time, Vec<String>)> = Vec::new();
+
+        for oid in revwalk {
+            let oid = oid.map_err(|e| {
+                RepositoryError::Storage(format!("Failed to read history entry: {}", e))
+            })?;
+            if Some(oid) == cache.head_oid {
+                reached_cached_head = true;
+                break;
+            }
+
+            let commit = repo.find_commit(oid).map_err(|e| {
+                RepositoryError::Storage(format!("Failed to find commit in history: {}", e))
+            })?;
+            let paths = Self::touched_entry_paths(&repo, &commit)?;
+            if !paths.is_empty() {
+                new_touches.push((commit.time(), paths));
+            }
+        }
+
+        if !reached_cached_head && cache.head_oid.is_some() {
+            // History was rewritten under us: rebuild from scratch.
+            stamps = Self::collect_full_history(&repo)?;
+        } else {
+            // Apply oldest-to-newest so created_at keeps the first touch
+            // and updated_at ends on the latest.
+            for (time, paths) in new_touches.iter().rev() {
+                for id in paths {
+                    let stamp = Self::format_git_time(*time);
+                    match stamps.get_mut(id) {
+                        Some((_, updated_at)) => *updated_at = stamp,
+                        None => {
+                            stamps.insert(id.clone(), (stamp.clone(), stamp));
+                        }
+                    }
+                }
+            }
+        }
+
+        cache.head_oid = Some(head_oid);
+        cache.stamps = stamps;
+        Ok(())
+    }
+
+    /// Root-level `<id>.md` paths changed by this commit versus its parent.
+    fn touched_entry_paths(
+        repo: &git2::Repository,
+        commit: &git2::Commit<'_>,
+    ) -> Result<Vec<String>, RepositoryError> {
+        let parent_tree = match commit.parent_count() {
+            0 => None,
+            _ => Some(
+                commit
+                    .parent(0)
+                    .and_then(|p| p.tree())
+                    .map_err(|e| {
+                        RepositoryError::Storage(format!("Failed to get parent tree: {}", e))
+                    })?,
+            ),
+        };
+        let tree = commit
+            .tree()
+            .map_err(|e| RepositoryError::Storage(format!("Failed to get tree: {}", e)))?;
+
+        let diff = repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+            .map_err(|e| RepositoryError::Storage(format!("Failed to diff history: {}", e)))?;
+
+        let mut paths = Vec::new();
+        for delta in diff.deltas() {
+            for file in [delta.old_file(), delta.new_file()] {
+                if let Some(path) = file.path() {
+                    let name = path.to_string_lossy();
+                    if !name.contains('/') && name.ends_with(".md") {
+                        let id = name[..name.len() - 3].to_string();
+                        if !paths.contains(&id) {
+                            paths.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(paths)
+    }
+
+    fn collect_full_history(
+        repo: &git2::Repository,
+    ) -> Result<std::collections::HashMap<String, (String, String)>, RepositoryError> {
+        let mut stamps: std::collections::HashMap<String, (git2::Time, git2::Time)> =
+            std::collections::HashMap::new();
+
         let mut revwalk = repo
             .revwalk()
             .map_err(|e| RepositoryError::Storage(format!("Failed to start history walk: {}", e)))?;
@@ -261,9 +400,6 @@ impl GitEntryRepository {
             .push_head()
             .map_err(|e| RepositoryError::Storage(format!("Failed to walk history: {}", e)))?;
 
-        let mut created_at: Option<git2::Time> = None;
-        let mut updated_at: Option<git2::Time> = None;
-
         for oid in revwalk {
             let oid = oid.map_err(|e| {
                 RepositoryError::Storage(format!("Failed to read history entry: {}", e))
@@ -272,21 +408,28 @@ impl GitEntryRepository {
                 RepositoryError::Storage(format!("Failed to find commit in history: {}", e))
             })?;
 
-            if Self::commit_touches_path(&commit, &entry_path)? {
-                if created_at.is_none() {
-                    created_at = Some(commit.time());
+            for id in Self::touched_entry_paths(repo, &commit)? {
+                match stamps.get_mut(&id) {
+                    Some((_, updated_at)) => *updated_at = commit.time(),
+                    None => {
+                        stamps.insert(id, (commit.time(), commit.time()));
+                    }
                 }
-                updated_at = Some(commit.time());
             }
         }
 
-        Ok(match (created_at, updated_at) {
-            (Some(created), Some(updated)) => Some((
-                Self::format_git_time(created),
-                Self::format_git_time(updated),
-            )),
-            _ => None,
-        })
+        Ok(stamps
+            .into_iter()
+            .map(|(id, (created, updated))| {
+                (
+                    id,
+                    (
+                        Self::format_git_time(created),
+                        Self::format_git_time(updated),
+                    ),
+                )
+            })
+            .collect())
     }
 
     fn parse_entry_content(id: &str, content: &str) -> Result<Entry, RepositoryError> {
@@ -2371,5 +2514,50 @@ mod tests {
         assert!(repo_a.get("202608241800").unwrap().is_none());
         assert!(!repo_a.attachment_dir("202608241800").exists());
         assert!(repo_a.list_attachments("202608241800").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_history_cache_invalidation_on_external_head_move() {
+        let remote_dir = TempDir::new().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+
+        let (_tmp_a, repo_a) = create_test_repo();
+        add_origin_remote(&repo_a, remote_dir.path());
+
+        let seed = Entry {
+            id: EntryId("202608251100".to_string()),
+            title: "Seed".to_string(),
+            body: "Start".to_string(),
+            tags: vec![],
+            created_at: "x".to_string(),
+            updated_at: "x".to_string(),
+        };
+        repo_a.save(&seed).unwrap();
+        repo_a.push().unwrap();
+
+        // Populate machine A's cache at its current head.
+        let before = repo_a.get("202608251100").unwrap().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let clone_dir = TempDir::new().unwrap();
+        let cloned =
+            Repository::clone(remote_dir.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo_b = GitEntryRepository::with_existing_repo(cloned);
+        let mut b_edit = repo_b.get("202608251100").unwrap().unwrap();
+        b_edit.body = "Edited remotely".to_string();
+        repo_b.save(&b_edit).unwrap();
+        repo_b.push().unwrap();
+
+        // A fast-forwards to B's commit; the cached head goes stale.
+        assert!(matches!(repo_a.pull().unwrap(), SyncResult::Pulled { .. }));
+
+        let after = repo_a.get("202608251100").unwrap().unwrap();
+        assert_eq!(after.body, "Edited remotely");
+        assert_eq!(after.created_at, before.created_at);
+        assert_ne!(
+            after.updated_at, before.updated_at,
+            "stale cache must invalidate when HEAD moves externally"
+        );
     }
 }

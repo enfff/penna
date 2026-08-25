@@ -30,20 +30,28 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 2. Engine returns structured success/errors/conflicts.
 3. Frontends own interaction UX; engine owns correctness and deterministic outcomes.
 
-### Engine API Surface (v1)
+### Engine API Surface (v1 — shipped)
 
 1. `connect_journal(repo_path)` -> open/init repository and return session handle.
-2. `journal_status(session_id)` -> branch/head/dirty metadata.
+2. `journal_status(session_id)` -> branch/head/dirty + merge state metadata.
 3. `disconnect_journal(session_id)` -> close session handle.
-4. `list_entries(session_id)` -> list entry models.
+4. `list_entries(session_id)` -> list entry models (working-tree first).
 5. `get_entry(session_id, id)` -> load single entry.
 6. `create_entry(session_id, request)` -> create plain Markdown entry using `YYYYMMDDHHmm.md` id/filename pattern.
 7. `update_entry(session_id, request)` -> update existing entry while preserving `created_at`.
-8. `delete_entry(session_id, id)` -> delete entry.
-9. `sync_journal(session_id)` -> fetch/push journal state and report sync status.
-10. Planned: `clone_journal(request)` -> clone remote repo and open session.
-11. Planned: `resolve_journal_path(session_id)` -> return canonical local repository path.
-12. Planned: `pull_journal(session_id)` and `push_journal(session_id)` -> explicit directional sync controls.
+8. `delete_entry(session_id, id)` -> delete entry (plus attachments and sidecar).
+9. `sync_journal(session_id)` -> fetch/merge/push journal state; auto-concludes merges.
+10. `clone_journal(request)` -> clone remote repo and open session.
+11. `resolve_journal_path(session_id)` -> return canonical local repository path.
+12. `pull_journal(session_id)` and `push_journal(session_id)` -> explicit directional sync controls.
+
+### Engine API Surface (v2 additions)
+
+- Conflict flow (ADR 0014): `get_entry_conflict`, `resolve_entry_conflict`, `reconcile_journal`.
+- Attachments (ADR 0012): `add_attachment`, `get_attachment`, `list_attachments`, `remove_attachment`.
+- Errors are a closed five-code set (ADR 0009); credentials resolve
+  provider-neutrally (ADR 0010). See `docs/ENGINE_API.md` for the full
+  contract including the threading rules.
 
 ## Source Of Truth Hierarchy
 
