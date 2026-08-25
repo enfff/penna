@@ -44,10 +44,10 @@ impl MarkdownExporter for FakeMarkdownExporter {
     ) -> Result<(String, Option<String>), Box<dyn Error + Send + Sync>> {
         let markdown = self.export(document)?;
         
-        if include_sidecar {
-            if let Some(sc) = sidecar {
-                return Ok((markdown, Some(serde_json::to_string(sc)?)));
-            }
+        if include_sidecar
+            && let Some(sc) = sidecar
+        {
+            return Ok((markdown, Some(serde_json::to_string(sc)?)));
         }
         
         Ok((markdown, None))

@@ -7,9 +7,11 @@ use penna_core::ports::{AttachmentStore, RepositoryError};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+type SharedFiles = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
+
 #[derive(Default, Clone)]
 struct FakeStore {
-    files: Arc<Mutex<HashMap<(String, String), Vec<u8>>>>,
+    files: SharedFiles,
 }
 
 impl AttachmentStore for FakeStore {

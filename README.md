@@ -34,7 +34,7 @@ gui/            # GUI application (future)
 
 ### Prerequisites
 
-- Rust toolchain (1.85+, workspace uses edition 2024)
+- Rust toolchain (1.88+, workspace uses edition 2024)
 
 ### Building the Engine
 

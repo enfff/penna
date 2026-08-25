@@ -43,10 +43,10 @@ fn remote_callbacks(resolved: &ResolvedCredential) -> RemoteCallbacks<'static> {
             ));
         }
 
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
-            if let Some(token) = &token {
-                return Cred::userpass_plaintext(PENNA_BASIC_AUTH_USER, token);
-            }
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+            && let Some(token) = &token
+        {
+            return Cred::userpass_plaintext(PENNA_BASIC_AUTH_USER, token);
         }
 
         Err(git2::Error::new(
@@ -342,12 +342,11 @@ impl GitEntryRepository {
             for file in [delta.old_file(), delta.new_file()] {
                 if let Some(path) = file.path() {
                     let name = path.to_string_lossy();
-                    if !name.contains('/') {
-                        if let Some(id) = name.strip_suffix(".md") {
-                            if !paths.contains(&id.to_string()) {
-                                paths.push(id.to_string());
-                            }
-                        }
+                    if !name.contains('/')
+                        && let Some(id) = name.strip_suffix(".md")
+                        && !paths.contains(&id.to_string())
+                    {
+                        paths.push(id.to_string());
                     }
                 }
             }
@@ -586,10 +585,10 @@ impl GitEntryRepository {
                 RepositoryError::Storage(format!("Failed to read directory entry: {}", e))
             })?;
             let name = path.file_name().to_string_lossy().into_owned();
-            if let Some(stem) = name.strip_suffix(".md") {
-                if path.metadata().map(|m| m.is_file()).unwrap_or(false) {
-                    ids.push(stem.to_string());
-                }
+            if let Some(stem) = name.strip_suffix(".md")
+                && path.metadata().map(|m| m.is_file()).unwrap_or(false)
+            {
+                ids.push(stem.to_string());
             }
         }
         Ok(ids)
@@ -1395,10 +1394,8 @@ impl ConflictView for GitEntryRepository {
         }
         let mut ids = Vec::new();
         for path in conflicted_paths_of(&index) {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if let Some(stem) = name.strip_suffix(".md") {
-                    ids.push(stem.to_string());
-                }
+            if let Some(stem) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".md")) {
+                ids.push(stem.to_string());
             }
         }
         ids.sort();
@@ -2247,7 +2244,6 @@ mod tests {
 
     #[test]
     fn test_resolved_save_stages_then_sync_concludes() {
-        use penna_core::ports::ConflictView;
 
         let remote_dir = TempDir::new().unwrap();
         Repository::init_bare(remote_dir.path()).unwrap();

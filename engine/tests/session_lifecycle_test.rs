@@ -109,7 +109,7 @@ fn disconnect_drops_only_the_handle_and_never_touches_data() {
         .expect("journal directory must still exist")
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .filter(|path| path.extension().map_or(false, |ext| ext == "md"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
         .collect();
     assert_eq!(
         entry_files.len(),

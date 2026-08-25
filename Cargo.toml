@@ -22,6 +22,6 @@ edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/enfff/penna"
 homepage = "https://github.com/enfff/penna"
-rust-version = "1.85"
+rust-version = "1.88"
 keywords = ["journal", "journaling", "markdown", "local-first", "notes"]
 categories = ["text-processing", "development-tools"]

@@ -5,7 +5,7 @@ Practical day-to-day guide for working on Penna. For rules, see `AGENTS.md`,
 
 ## Prerequisites
 
-- Rust toolchain 1.85+ (workspace uses edition 2024)
+- Rust toolchain 1.88+ (workspace uses edition 2024)
 - Git (no direct git usage outside `adapters/git`)
 - Optional for agents: [opencode](https://opencode.ai) (`AGENTS.md` at the repo
   root is loaded automatically)
