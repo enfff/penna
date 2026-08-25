@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use penna_core::application::CloneJournalUseCase;
 use penna_core::ports::{JournalClone, RepositoryError};
@@ -9,7 +9,7 @@ struct FakeJournalClone {
 }
 
 impl JournalClone for FakeJournalClone {
-    fn clone_journal(&self, _remote_url: &str, _local_path: &PathBuf) -> Result<(), RepositoryError> {
+    fn clone_journal(&self, _remote_url: &str, _local_path: &Path) -> Result<(), RepositoryError> {
         self.result.clone()
     }
 }

@@ -1,5 +1,5 @@
 use crate::domain::{AttachmentMeta, Document, Entry, EntryConflict, Sidecar};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -55,7 +55,7 @@ pub trait AttachmentStore: Send + Sync {
 }
 
 pub trait JournalClone: Send + Sync {
-    fn clone_journal(&self, remote_url: &str, local_path: &PathBuf) -> Result<(), RepositoryError>;
+    fn clone_journal(&self, remote_url: &str, local_path: &Path) -> Result<(), RepositoryError>;
 }
 
 pub trait JournalPath: Send + Sync {
@@ -89,10 +89,10 @@ impl fmt::Display for FileSystemError {
 impl std::error::Error for FileSystemError {}
 
 pub trait FileSystem: Send + Sync {
-    fn read(&self, path: &PathBuf) -> Result<Vec<u8>, FileSystemError>;
-    fn write(&self, path: &PathBuf, data: &[u8]) -> Result<(), FileSystemError>;
-    fn exists(&self, path: &PathBuf) -> bool;
-    fn create_dir_all(&self, path: &PathBuf) -> Result<(), FileSystemError>;
+    fn read(&self, path: &Path) -> Result<Vec<u8>, FileSystemError>;
+    fn write(&self, path: &Path, data: &[u8]) -> Result<(), FileSystemError>;
+    fn exists(&self, path: &Path) -> bool;
+    fn create_dir_all(&self, path: &Path) -> Result<(), FileSystemError>;
 }
 
 pub trait MarkdownImporter: Send + Sync {

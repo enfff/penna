@@ -218,36 +218,6 @@ impl GitEntryRepository {
             .unwrap_or_default()
     }
 
-    fn commit_touches_path(
-        commit: &git2::Commit<'_>,
-        path: &Path,
-    ) -> Result<bool, RepositoryError> {
-        let current_blob = commit
-            .tree()
-            .ok()
-            .and_then(|tree| tree.get_path(path).ok())
-            .map(|entry| entry.id());
-
-        let parent_blob = match commit.parent_count() {
-            0 => None,
-            _ => match commit.parent(0) {
-                Ok(parent) => parent
-                    .tree()
-                    .ok()
-                    .and_then(|tree| tree.get_path(path).ok())
-                    .map(|entry| entry.id()),
-                Err(e) => {
-                    return Err(RepositoryError::Storage(format!(
-                        "Failed to get parent commit: {}",
-                        e
-                    )))
-                }
-            },
-        };
-
-        Ok(current_blob != parent_blob)
-    }
-
     /// Derives durable entry timestamps from git history (ADR 0007):
     /// created_at is the author date of the earliest commit touching
     /// `<id>.md`, updated_at of the latest. Returns None when no history
@@ -372,10 +342,11 @@ impl GitEntryRepository {
             for file in [delta.old_file(), delta.new_file()] {
                 if let Some(path) = file.path() {
                     let name = path.to_string_lossy();
-                    if !name.contains('/') && name.ends_with(".md") {
-                        let id = name[..name.len() - 3].to_string();
-                        if !paths.contains(&id) {
-                            paths.push(id);
+                    if !name.contains('/') {
+                        if let Some(id) = name.strip_suffix(".md") {
+                            if !paths.contains(&id.to_string()) {
+                                paths.push(id.to_string());
+                            }
                         }
                     }
                 }
@@ -645,9 +616,8 @@ impl GitEntryRepository {
         for entry in tree.iter() {
             if entry.filemode() == git2::FileMode::Blob as i32 || entry.filemode() == 33188 {
                 let path_str = entry.name().unwrap_or("");
-                if path_str.ends_with(".md") {
-                    let id = path_str[..path_str.len() - 3].to_string();
-                    entry_ids.push(id);
+                if let Some(id) = path_str.strip_suffix(".md") {
+                    entry_ids.push(id.to_string());
                 }
             }
         }
@@ -928,7 +898,7 @@ impl GitEntryRepository {
 }
 
 impl JournalClone for GitJournalCloner {
-    fn clone_journal(&self, remote_url: &str, local_path: &PathBuf) -> Result<(), RepositoryError> {
+    fn clone_journal(&self, remote_url: &str, local_path: &Path) -> Result<(), RepositoryError> {
         Repository::clone(remote_url, local_path).map_err(|e| {
             RepositoryError::Storage(format!(
                 "Failed to clone repository from {} to {}: {}",

@@ -21,11 +21,7 @@ impl<F: FileSystem> FileEntryRepository<F> {
     }
 
     fn parse_filename(filename: &str) -> Option<String> {
-        if filename.ends_with(".md") {
-            Some(filename[..filename.len() - 3].to_string())
-        } else {
-            None
-        }
+        filename.strip_suffix(".md").map(str::to_string)
     }
 }
 
@@ -83,10 +79,10 @@ impl<F: FileSystem> EntryRepository for FileEntryRepository<F> {
                 RepositoryError::Storage("Invalid filename encoding".to_string())
             })?;
             
-            if let Some(id) = Self::parse_filename(filename) {
-                if let Ok(Some(entry)) = self.get(&id) {
-                    entries.push(entry);
-                }
+            if let Some(id) = Self::parse_filename(filename)
+                && let Ok(Some(entry)) = self.get(&id)
+            {
+                entries.push(entry);
             }
         }
         

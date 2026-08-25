@@ -79,10 +79,10 @@ fn collect_text(nodes: &[Node], out: &mut String) {
 
 fn extract_frontmatter_raw(document: &Document) -> Option<String> {
     for node in &document.content {
-        if let Some(attrs) = &node.attrs {
-            if let Some(raw) = attrs.get("frontmatter_raw").and_then(|v| v.as_str()) {
-                return Some(raw.to_string());
-            }
+        if let Some(attrs) = &node.attrs
+            && let Some(raw) = attrs.get("frontmatter_raw").and_then(|v| v.as_str())
+        {
+            return Some(raw.to_string());
         }
     }
 
