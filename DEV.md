@@ -60,10 +60,3 @@ git push origin main && git push origin v0.1.2
 
 Never re-tag or force-push release tags. Full process: `docs/PUBLISHING.md`.
 
-## Repo Quirks
-
-- `docker-compose.yml`, `Dockerfile`, `docker/` are leftovers from an old
-  Svelte web prototype; they reference files that do not exist. Ignore them
-  unless reviving that frontend.
-- `probe/` is a scratch crate used for experiments; keep it out of release
-  commits or remove it when done.
