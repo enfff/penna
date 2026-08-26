@@ -5,32 +5,29 @@ A local-first, git-native journaling application.
 [![License: GPL v3+](https://img.shields.io/badge/License-GPLv3%2B-blue.svg)](LICENSE)
 [![CI](https://github.com/enfff/penna/actions/workflows/ci.yml/badge.svg)](https://github.com/enfff/penna/actions/workflows/ci.yml)
 
-## Architecture
+## What This Repository Is
 
-Penna is built with a clean separation between the **engine** and **frontends**:
+This repository provides the **Penna engine**: a pure Rust library that owns
+all journaling logic — entries, git-backed storage and sync, merge-based
+conflict resolution, tags, attachments, and data contracts. It is a library,
+not an application; the Penna apps are built in separate repositories and
+talk to the engine exclusively through the `penna-engine` API.
 
-- **Engine** (`core/`, `adapters/`, `engine/`): Pure Rust library implementing all journaling logic, version control, and data management. Completely frontend-agnostic.
-- **Frontends** (`cli/`, `tui/`, `gui/`): Separate binaries that interact with the engine. Currently focusing on building the engine first.
-
-### Layer Structure
+### Workspace Layout
 
 ```
 core/
   domain/       # Pure Rust entities and business rules (zero external deps)
-  application/  # Use cases (create entry, commit, resolve conflict, etc.)
-  ports/        # Trait definitions (GitProvider, FileSystem, MarkdownImporter, etc.)
+  application/  # Use cases (entry CRUD, sync, conflicts, tags, attachments)
+  ports/        # Trait definitions (EntryRepository, ConflictView, AttachmentStore, ...)
   tests/        # Unit tests for domain and application code
 
 adapters/
-  git/          # git2-rs implementation of GitProvider port
-  fs/           # Filesystem implementation of FileSystem port
+  git/          # git2-rs implementation of storage, sync, and conflict ports
+  fs/           # Filesystem port implementation
   markdown/     # Markdown importer/exporter implementations
 
 engine/         # Public engine API that re-exports core and adapters
-
-cli/            # Command-line interface (future)
-tui/            # Terminal UI (future)
-gui/            # GUI application (future)
 ```
 
 ## Development
@@ -52,41 +49,26 @@ cargo test
 cargo clippy
 ```
 
-### Running Frontends
-
-Currently the focus is on building the engine. Frontends will be developed separately:
-
-```bash
-# CLI (when implemented)
-cargo run -p penna-cli
-
-# TUI (when implemented)
-cargo run -p penna-tui
-```
-
 ## Releases
 
-The engine is distributed as a **private registry via git tags** on the
-private GitHub remote. All five crates share one lockstep version
-(ADR 0002PUBLISHING.md`](docs/PUBLISHING.md) - Versioning, tags, and the private release process
-- [`docs/).
+The five published crates share one lockstep version, released as an
+immutable git tag (ADR 0002):
 
 ```bash
-# bump + commit + tag vX.Y.Z
-scripts/bump-version.sh 0.1.1
+# bump + commit + tag vX.Y.Z (requires a clean tree)
+scripts/bump-version.sh 0.2.1
 
 # publish (tag push = publish)
-git push origin main && git push origin vX.Y.Z
+git push origin master && git push origin vX.Y.Z
 ```
 
 Consumers pin a tag:
 
 ```toml
-penna-engine = { git = "https://github.com/<owner>/penna", tag = "v0.1.0" }
+penna-engine = { git = "https://github.com/enfff/penna", tag = "v0.2.1" }
 ```
 
-See [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for the full release
-process, the one-time remote setup, and why not crates.io.
+See [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for the full release process.
 
 ## License
 
@@ -127,4 +109,6 @@ Available prompts include:
 
 ## Status
 
-This is a work in progress. The engine architecture is being established. Frontends will be developed after the engine is stable.
+The engine is stable and published (v0.2.x): entry lifecycle, git sync with
+marker-based conflict resolution, attachments, tags, and provider-neutral
+credentials. CI runs the test suite and clippy on every push to master.

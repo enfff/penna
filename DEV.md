@@ -45,7 +45,7 @@ introduce new failures.
 | New port trait | `core/ports` |
 | New I/O adapter | `adapters/*` implementing a port |
 | Engine API surface | `engine/` |
-| Frontend feature | `cli/`, `tui/`, `gui/` (call engine API only) |
+| Frontend feature | separate repositories (consume the published `penna-engine`) |
 
 ## Releases
 

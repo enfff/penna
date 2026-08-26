@@ -59,7 +59,7 @@ flowchart LR
 | `adapters/git/` | Adapter | Git-backed implementation of ports |
 | `adapters/markdown/` | Adapter | Markdown import/export implementation |
 | `engine/` | Engine API | Public engine boundary for consumers |
-| `cli/`, `tui/`, `gui/` | Frontends | Optional clients of engine API |
+| Application frontends | Frontends | Live in separate repositories; consume only the engine API |
 
 ## Operational Rules
 

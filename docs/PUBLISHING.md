@@ -1,16 +1,15 @@
 # Publishing the Penna Engine
 
-## The private registry: git tags
+## The registry: git tags
 
 GitHub Packages does **not** host cargo crates (it supports npm, Maven,
 Gradle, NuGet, RubyGems, and containers — cargo is not among them). The
-canonical *private* way to distribute a Rust workspace is therefore:
+canonical way to distribute this workspace is therefore:
 
-> **The registry is a private GitHub repository; the "version" is a git tag.**
+> **The registry is this GitHub repository; the "version" is a git tag.**
 
-No hosting account, no credentials file, no registry server. Anyone with
-read access to the private repo can build against any tag; everyone else
-cannot even see the source.
+No hosting account, no credentials file, no registry server. Anyone can
+build against any published tag.
 
 ### Consumers
 
@@ -58,26 +57,10 @@ SemVer for pre-1.0: `0.x.y -> 0.x.(y+1)` additive/fix,
 - [ ] `git push origin main && git push origin v<new>`
 - [ ] one smoke build of a consumer against the new tag
 
-## First publish (0.1.0) — one-time setup
+## First publish — one-time setup (completed)
 
-There is currently **no `origin` remote** (this repo is local-only).
-First-time sequence:
-
-```bash
-# 1. create the PRIVATE repo on GitHub (web UI):
-#    github.com -> New repository -> name: penna -> Private
-
-# 2. wire it up
-git remote add origin git@github.com:<owner>/penna.git
-git push -u origin main
-
-# 3. tag the current version and push it
-git tag v0.1.0
-git push origin v0.1.0
-
-# 4. verify consumer resolution works (in a scratch project):
-#    penna-engine = { git = "https://github.com/<owner>/penna", tag = "v0.1.0" }
-```
+Done on 2026-08-24: remote wired to `git@github.com:enfff/penna.git`,
+published tags `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.2.1`.
 
 The workspace carries `license = "GPL-3.0-or-later"` (inherited by every
 crate from `[workspace.package]`), with the full license text in
