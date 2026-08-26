@@ -19,7 +19,7 @@ members = [
 [workspace.package]
 version = "0.2.1"
 edition = "2024"
-license = "UNLICENSED"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/enfff/penna"
 homepage = "https://github.com/enfff/penna"
 rust-version = "1.88"

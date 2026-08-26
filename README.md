@@ -2,6 +2,9 @@
 
 A local-first, git-native journaling application.
 
+[![License: GPL v3+](https://img.shields.io/badge/License-GPLv3%2B-blue.svg)](LICENSE)
+[![CI](https://github.com/enfff/penna/actions/workflows/ci.yml/badge.svg)](https://github.com/enfff/penna/actions/workflows/ci.yml)
+
 ## Architecture
 
 Penna is built with a clean separation between the **engine** and **frontends**:
@@ -84,6 +87,20 @@ penna-engine = { git = "https://github.com/<owner>/penna", tag = "v0.1.0" }
 
 See [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for the full release
 process, the one-time remote setup, and why not crates.io.
+
+## License
+
+Penna is [GPL-3.0-or-later](LICENSE). Copyright © 2026 the Penna authors.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+Public License for more details.
 
 ## Documentation
 

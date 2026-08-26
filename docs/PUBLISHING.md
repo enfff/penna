@@ -79,10 +79,10 @@ git push origin v0.1.0
 #    penna-engine = { git = "https://github.com/<owner>/penna", tag = "v0.1.0" }
 ```
 
-`license = "UNLICENSED"` is carried in every manifest; on a private repo
-it means "see me" rather than a license grant — fine for a private
-registry. If this ever moves to public crates.io, pick a real SPDX id
-first (`workspace.package.license`).
+The workspace carries `license = "GPL-3.0-or-later"` (inherited by every
+crate from `[workspace.package]`), with the full license text in
+[`LICENSE`](../LICENSE). The repository is public; the git-tag registry
+model above is unchanged.
 
 ## crates.io (public option)
 
