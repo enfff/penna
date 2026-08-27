@@ -14,8 +14,8 @@ categories.workspace = true
 chrono = { version = "0.4", default-features = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-penna-core = { version = "0.3.0", path = "../core" }
-penna-adapters-git = { version = "0.3.0", path = "../adapters/git" }
+penna-core = { version = "0.3.1", path = "../core" }
+penna-adapters-git = { version = "0.3.1", path = "../adapters/git" }
 
 [dev-dependencies]
 git2 = "0.19"
