@@ -9,4 +9,4 @@ license.workspace = true
 publish = false
 
 [dependencies]
-penna-core = { version = "0.2.1", path = "../../core" }
+penna-core = { version = "0.3.0", path = "../../core" }
