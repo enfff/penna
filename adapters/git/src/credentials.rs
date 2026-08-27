@@ -19,20 +19,25 @@ pub fn is_ssh_remote(remote_url: &str) -> bool {
             || (remote_url.contains('@') && !remote_url.starts_with("file://")))
 }
 
+/// Best-effort token for an HTTPS remote (ADR 0010): the env var wins over
+/// the keychain. `None` when neither is available; callers may still
+/// proceed, because public remotes work without a token.
+pub fn available_token(env_token: Option<&str>, keychain_token: Option<String>) -> Option<String> {
+    env_token
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .or(keychain_token)
+}
+
 pub fn resolve_https_token(
     env_token: Option<&str>,
     keychain_token: Option<String>,
     remote_url: &str,
 ) -> Result<ResolvedCredential, RepositoryError> {
-    if let Some(token) = env_token.map(str::trim).filter(|t| !t.is_empty()) {
-        return Ok(ResolvedCredential::Token(token.to_string()));
-    }
-
-    if let Some(token) = keychain_token {
-        return Ok(ResolvedCredential::Token(token));
-    }
-
-    Err(RepositoryError::AuthRequired(remote_url.to_string()))
+    available_token(env_token, keychain_token)
+        .map(ResolvedCredential::Token)
+        .ok_or_else(|| RepositoryError::AuthRequired(remote_url.to_string()))
 }
 
 pub fn resolve_credentials(
@@ -139,6 +144,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved, ResolvedCredential::Token("stored-token".to_string()));
+    }
+
+    #[test]
+    fn available_token_is_none_without_env_or_keychain() {
+        assert_eq!(available_token(None, None), None);
+        assert_eq!(available_token(Some("   "), None), None);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use git2::build::CheckoutBuilder;
+use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{Cred, CredentialType, RemoteCallbacks, Repository, Signature};
 use penna_core::domain::{AttachmentMeta, Entry, EntryConflict, EntryId};
 use penna_core::ports::{
@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::credentials::{
-    is_https_remote, lookup_keychain_token, resolve_credentials, ResolvedCredential,
+    available_token, is_https_remote, lookup_keychain_token, resolve_credentials,
+    ResolvedCredential,
 };
 
 /// Neutral basic-auth username for HTTPS token auth (ADR 0010): servers
@@ -894,16 +895,58 @@ impl GitEntryRepository {
 
 impl JournalClone for GitJournalCloner {
     fn clone_journal(&self, remote_url: &str, local_path: &Path) -> Result<(), RepositoryError> {
-        Repository::clone(remote_url, local_path).map_err(|e| {
-            RepositoryError::Storage(format!(
-                "Failed to clone repository from {} to {}: {}",
-                remote_url,
-                local_path.display(),
-                e
-            ))
-        })?;
+        // Authenticate the clone the same way sync does (ADR 0010): the env
+        // token wins over the keychain. A private HTTPS remote fails without
+        // a token; when that happens with no token available (or a stored
+        // token is rejected) we surface `AuthRequired` so the caller can
+        // prompt and retry. A public remote clones fine with no token and
+        // never reaches that branch.
+        let env_token = std::env::var("PENNA_GIT_TOKEN").ok();
+        let keychain_token = if is_https_remote(remote_url) {
+            lookup_keychain_token(remote_url)
+        } else {
+            None
+        };
+        let token = if is_https_remote(remote_url) {
+            available_token(env_token.as_deref(), keychain_token)
+        } else {
+            None
+        };
 
-        Ok(())
+        let mut builder = RepoBuilder::new();
+        if let Some(token) = &token {
+            let mut fetch_opts = git2::FetchOptions::new();
+            fetch_opts
+                .remote_callbacks(remote_callbacks(&ResolvedCredential::Token(token.clone())));
+            builder.fetch_options(fetch_opts);
+        }
+
+        // libgit2 leaves a partial directory behind on failure. Only clean up
+        // what this failed clone created so a retry after the user supplies a
+        // token starts from a clean path, and a pre-existing target directory
+        // (which libgit2 would have refused anyway) is never touched.
+        let preexisting = local_path.exists();
+
+        builder
+            .clone(remote_url, local_path)
+            .map(|_| ())
+            .map_err(|e| {
+                if !preexisting {
+                    let _ = std::fs::remove_dir_all(local_path);
+                }
+                let auth_failure = is_https_remote(remote_url)
+                    && (token.is_none() || e.code() == git2::ErrorCode::Auth);
+                if auth_failure {
+                    RepositoryError::AuthRequired(remote_url.to_string())
+                } else {
+                    RepositoryError::Storage(format!(
+                        "Failed to clone repository from {} to {}: {}",
+                        remote_url,
+                        local_path.display(),
+                        e
+                    ))
+                }
+            })
     }
 }
 

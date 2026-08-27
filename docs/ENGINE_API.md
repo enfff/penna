@@ -567,7 +567,8 @@ is never overwritten silently.
 
 ## Authentication (ADR 0010)
 
-Sync methods resolve credentials automatically, in order:
+Network methods (`sync_journal`, `pull_journal`, `push_journal`,
+`clone_journal`) resolve credentials automatically, in order:
 
 1. SSH remotes: the user's ssh-agent.
 2. HTTPS remotes: the provider-neutral `PENNA_GIT_TOKEN` env var, then the
@@ -607,7 +608,7 @@ threads; nothing here is async. What each call can block on:
 
 | Method | Blocks on |
 |--------|-----------|
-| `connect_journal`, `clone_journal` | filesystem; `clone_journal` also network |
+| `connect_journal`, `clone_journal` | filesystem; `clone_journal` also network + OS keychain lookup |
 | `journal_status`, `resolve_journal_path` | local disk only |
 | `list_entries`, `get_entry` | local disk only (timestamp cache: first read after new commits walks them once) |
 | `create_entry`, `update_entry`, `delete_entry` | local disk only |

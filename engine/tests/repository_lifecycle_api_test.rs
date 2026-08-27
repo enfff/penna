@@ -39,6 +39,77 @@ fn clone_journal_creates_session_and_resolves_path() {
 }
 
 #[test]
+fn clone_journal_https_without_token_reports_auth_required() {
+    // A private HTTPS remote fails without a credential. When no token is
+    // available the clone surfaces `AuthRequired` (ADR 0015) so the caller
+    // can prompt and retry. A closed local port guarantees a fast,
+    // network-free failure that still exercises the HTTPS + no-token branch.
+    // Assumes `PENNA_GIT_TOKEN` is not exported in the test environment.
+    let clone_parent = TempDir::new().expect("clone parent should exist");
+    let engine = PennaEngine::new();
+
+    let error = engine
+        .clone_journal(CloneJournalRequest {
+            remote_url: "https://127.0.0.1:9/penna/journal.git".to_string(),
+            local_parent_dir: clone_parent.path().to_string_lossy().to_string(),
+            directory_name: "my-journal".to_string(),
+        })
+        .expect_err("HTTPS clone with no token must fail and ask for credentials");
+
+    assert_eq!(error.code(), "AUTH_REQUIRED");
+    let dto = error.to_dto();
+    assert_eq!(dto.code, "AUTH_REQUIRED");
+    assert_eq!(
+        dto.auth_remote.as_deref(),
+        Some("https://127.0.0.1:9/penna/journal.git")
+    );
+}
+
+#[test]
+fn clone_journal_cleans_partial_directory_on_failure() {
+    let clone_parent = TempDir::new().expect("clone parent should exist");
+    let engine = PennaEngine::new();
+    let target = clone_parent.path().join("partial-journal");
+
+    let error = engine
+        .clone_journal(CloneJournalRequest {
+            remote_url: "https://127.0.0.1:9/penna/journal.git".to_string(),
+            local_parent_dir: clone_parent.path().to_string_lossy().to_string(),
+            directory_name: "partial-journal".to_string(),
+        })
+        .expect_err("clone must fail");
+
+    assert_eq!(error.code(), "AUTH_REQUIRED");
+    assert!(
+        !target.exists(),
+        "the failed clone must not leave a partial directory behind"
+    );
+}
+
+#[test]
+fn clone_journal_keeps_preexisting_target_directory() {
+    let clone_parent = TempDir::new().expect("clone parent should exist");
+    let target = clone_parent.path().join("user-data");
+    std::fs::create_dir_all(&target).expect("target should be created");
+    let marker = target.join("user-file.txt");
+    std::fs::write(&marker, "user data").expect("marker should be written");
+
+    let engine = PennaEngine::new();
+    engine
+        .clone_journal(CloneJournalRequest {
+            remote_url: "https://127.0.0.1:9/penna/journal.git".to_string(),
+            local_parent_dir: clone_parent.path().to_string_lossy().to_string(),
+            directory_name: "user-data".to_string(),
+        })
+        .expect_err("clone into a non-empty directory must fail");
+
+    assert!(
+        marker.exists(),
+        "a pre-existing target directory must never be deleted on failure"
+    );
+}
+
+#[test]
 fn push_journal_pushes_local_changes_to_remote() {
     let remote_dir = TempDir::new().expect("remote dir should exist");
     Repository::init_bare(remote_dir.path()).expect("bare remote should init");
