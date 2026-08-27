@@ -49,9 +49,11 @@ Penna engine gives journal-specific behavior, safety rules, and stable API over 
 
 - Conflict flow (ADR 0014): `get_entry_conflict`, `resolve_entry_conflict`, `reconcile_journal`.
 - Attachments (ADR 0012): `add_attachment`, `get_attachment`, `list_attachments`, `remove_attachment`.
-- Errors are a closed five-code set (ADR 0009); credentials resolve
-  provider-neutrally (ADR 0010). See `docs/ENGINE_API.md` for the full
-  contract including the threading rules.
+- Credential store (ADR 0015): `store_credential`, `delete_credential`,
+  `has_credential` (per-remote, platform secret store).
+- Errors are a closed six-code set (ADR 0009, extended by ADR 0015);
+  credentials resolve provider-neutrally (ADR 0010). See `docs/ENGINE_API.md`
+  for the full contract including the threading rules.
 
 ## Source Of Truth Hierarchy
 

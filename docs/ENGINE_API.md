@@ -578,9 +578,27 @@ Sync methods resolve credentials automatically, in order:
 3. Local/file remotes need no credentials.
 
 When authentication is required but unavailable, sync fails with code
-`REPO` and a message naming the remote. Frontends prompt for the secret,
-may persist it to the keychain via the engine's credential store, then
-retry.
+`AUTH_REQUIRED` and `auth_remote` set to the remote URL (ADR 0015).
+Frontends prompt for the secret, persist it via the credential store,
+then retry.
+
+### Credential Store (ADR 0015)
+
+Per-remote, not session-scoped — a credential belongs to the remote, not
+the open journal:
+
+- `store_credential(remote_url, secret)` -> persist a token (e.g. an HTTPS
+  PAT) in the platform secret store. Blank secrets are rejected with
+  `VALIDATION`. The resolution path picks the token up on the next
+  fetch/push/clone.
+- `delete_credential(remote_url)` -> remove the stored credential
+  (account rotation). Backend behavior for missing entries varies; check
+  `has_credential` first when idempotency matters.
+- `has_credential(remote_url)` -> true if a credential is stored.
+
+Flow: sync returns `AUTH_REQUIRED` + `auth_remote` → frontend prompts →
+`store_credential` → retry sync. No prompt or callback ever runs inside
+the engine.
 
 ## Threading Contract
 
@@ -595,6 +613,7 @@ threads; nothing here is async. What each call can block on:
 | `create_entry`, `update_entry`, `delete_entry` | local disk only |
 | `add_attachment`, `get_attachment`, `list_attachments`, `remove_attachment` | local disk only |
 | `sync_journal`, `pull_journal`, `push_journal` | **network fetch/push** + possibly OS keychain lookup |
+| `store_credential`, `delete_credential`, `has_credential` | OS keychain IPC only |
 | tag and sidecar-integrity methods | local disk only |
 
 Rule of thumb: anything with "sync", "pull", "push", or "clone" in the
@@ -606,10 +625,14 @@ Engine returns typed errors internally. Bridge should map to consistent frontend
 
 ```json
 {
-  "code": "NOT_CONNECTED|IO|REPO|VALIDATION|CONFLICT",
-  "message": "human readable detail"
+  "code": "NOT_CONNECTED|IO|REPO|VALIDATION|CONFLICT|AUTH_REQUIRED",
+  "message": "human readable detail",
+  "auth_remote": "https://github.com/user/journal.git"
 }
 ```
+
+`auth_remote` is present if and only if `code` is `AUTH_REQUIRED`
+(ADR 0015); it is omitted from the serialized shape otherwise.
 
 ## Integration Notes
 

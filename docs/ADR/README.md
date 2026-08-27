@@ -14,3 +14,4 @@
 - [0012 - Attachments As Per-Entry Directories](./0012-attachments-as-per-entry-directories.md)
 - [0013 - GTK4 With Libadwaita For The GUI Frontend](./0013-gtk4-libadwaita-for-gui-frontend.md)
 - [0014 - Marker-Based Conflict State](./0014-marker-based-conflict-state.md) (supersedes 0006 mechanics)
+- [0015 - Credential Store API and AUTH_REQUIRED Code](./0015-credential-store-api-and-auth-required-code.md) (supersedes 0010 item 4's code mapping; extends the ADR 0009 code set)

@@ -19,6 +19,16 @@ fn all_variants() -> Vec<(&'static str, EngineError)> {
             EngineError::Repo(RepositoryError::Storage("corrupt".to_string())),
         ),
         (
+            "CredentialsRequired",
+            EngineError::CredentialsRequired {
+                remote_url: "https://git.example.com/u/journal.git".to_string(),
+            },
+        ),
+        (
+            "Validation",
+            EngineError::Validation("empty title".to_string()),
+        ),
+        (
             "Create",
             EngineError::Create(CreateEntryError::Domain(DomainError::EmptyTitle)),
         ),
@@ -37,12 +47,19 @@ fn all_variants() -> Vec<(&'static str, EngineError)> {
 }
 
 #[test]
-fn public_error_codes_are_exactly_the_documented_five() {
+fn public_error_codes_are_exactly_the_documented_set() {
     let mut sorted = PUBLIC_ERROR_CODES.to_vec();
     sorted.sort();
     assert_eq!(
         sorted,
-        vec!["CONFLICT", "IO", "NOT_CONNECTED", "REPO", "VALIDATION"]
+        vec![
+            "AUTH_REQUIRED",
+            "CONFLICT",
+            "IO",
+            "NOT_CONNECTED",
+            "REPO",
+            "VALIDATION",
+        ]
     );
 }
 
@@ -63,6 +80,8 @@ fn classification_matches_adr_0009_buckets() {
         ("Io", "IO"),
         ("NotConnected", "NOT_CONNECTED"),
         ("Repo", "REPO"),
+        ("CredentialsRequired", "AUTH_REQUIRED"),
+        ("Validation", "VALIDATION"),
         ("Create", "VALIDATION"),
         ("Update", "VALIDATION"),
         ("AddTag", "VALIDATION"),
@@ -139,15 +158,33 @@ fn converts_error_to_dto() {
 }
 
 #[test]
-fn credentials_required_maps_to_repo_code_with_remote_payload() {
+fn credentials_required_maps_to_auth_required_with_structured_remote() {
     let error = EngineError::CredentialsRequired {
         remote_url: "https://github.com/u/journal.git".to_string(),
     };
 
-    assert_eq!(error.code(), "REPO", "ADR 0009 set stays closed");
+    assert_eq!(error.code(), "AUTH_REQUIRED", "ADR 0015");
     let dto = error.to_dto();
-    assert_eq!(dto.code, "REPO");
+    assert_eq!(dto.code, "AUTH_REQUIRED");
+    assert_eq!(
+        dto.auth_remote.as_deref(),
+        Some("https://github.com/u/journal.git")
+    );
     assert!(dto.message.contains("https://github.com/u/journal.git"));
+}
+
+#[test]
+fn dto_auth_remote_is_absent_for_every_non_auth_error() {
+    for error in all_variants() {
+        let (_name, error) = error;
+        let dto = error.to_dto();
+        let is_auth = dto.code == "AUTH_REQUIRED";
+        assert_eq!(
+            dto.auth_remote.is_some(),
+            is_auth,
+            "auth_remote must be set if and only if code is AUTH_REQUIRED"
+        );
+    }
 }
 
 #[test]

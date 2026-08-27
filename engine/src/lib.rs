@@ -1,5 +1,5 @@
 use chrono::{Duration, Local};
-use penna_adapters_git::{GitEntryRepository, GitJournalCloner};
+use penna_adapters_git::{GitEntryRepository, GitJournalCloner, credentials};
 use penna_core::application::{
     AddAttachmentError, AddAttachmentUseCase, AddTagError, AddTagUseCase,
     CloneJournalUseCase, CreateEntryError, CreateEntryInput, CreateEntryUseCase,
@@ -74,21 +74,26 @@ impl From<RemoveAttachmentError> for EngineError {
     }
 }
 
-/// Stable public error codes (ADR 0009). This set is closed: adding a code
-/// requires an ADR and a minor version bump. Frontends switch on these
-/// strings; `EngineError::message` text is never contractual.
-pub const PUBLIC_ERROR_CODES: [&str; 5] = [
+/// Stable public error codes (ADR 0009, extended by ADR 0015). This set is
+/// closed: adding a code requires an ADR and a minor version bump. Frontends
+/// switch on these strings; `EngineError::message` text is never contractual.
+pub const PUBLIC_ERROR_CODES: [&str; 6] = [
     "NOT_CONNECTED",
     "IO",
     "REPO",
     "VALIDATION",
     "CONFLICT",
+    "AUTH_REQUIRED",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineErrorDto {
     pub code: String,
     pub message: String,
+    /// Set when a credential is required: the remote URL to authenticate to
+    /// (ADR 0015). `None` for every other code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_remote: Option<String>,
 }
 
 impl EngineError {
@@ -97,7 +102,7 @@ impl EngineError {
             EngineError::Io(_) => "IO",
             EngineError::NotConnected(_) => "NOT_CONNECTED",
             EngineError::Repo(_) => "REPO",
-            EngineError::CredentialsRequired { .. } => "REPO",
+            EngineError::CredentialsRequired { .. } => "AUTH_REQUIRED",
             EngineError::Validation(_) => "VALIDATION",
             EngineError::Create(CreateEntryError::Domain(_)) => "VALIDATION",
             EngineError::Create(CreateEntryError::Repository(_)) => "REPO",
@@ -135,6 +140,10 @@ impl EngineError {
         EngineErrorDto {
             code: self.code().to_string(),
             message: self.message(),
+            auth_remote: match self {
+                EngineError::CredentialsRequired { remote_url } => Some(remote_url.clone()),
+                _ => None,
+            },
         }
     }
 }
@@ -672,6 +681,33 @@ impl PennaEngine {
 
         let use_case = ValidateSidecarIntegrityUseCase::new();
         use_case.execute(entry_id, source).into()
+    }
+
+    /// Persist a credential (e.g. an HTTPS token / PAT) for `remote_url` in
+    /// the platform secret store (ADR 0010, ADR 0015). The existing
+    /// resolution path picks it up on the next fetch/push/clone. Not
+    /// session-scoped: a credential belongs to the remote, not the journal.
+    pub fn store_credential(&self, remote_url: &str, secret: &str) -> Result<(), EngineError> {
+        if secret.trim().is_empty() {
+            return Err(EngineError::Validation(
+                "credential secret must not be blank".to_string(),
+            ));
+        }
+
+        credentials::store_keychain_token(remote_url, secret).map_err(EngineError::from)
+    }
+
+    /// Remove any stored credential for `remote_url` (account rotation,
+    /// ADR 0015). Backends differ on deleting a remote that has no stored
+    /// credential: some return success, some return a storage error.
+    /// Check `has_credential` first when idempotency matters.
+    pub fn delete_credential(&self, remote_url: &str) -> Result<(), EngineError> {
+        credentials::delete_keychain_token(remote_url).map_err(EngineError::from)
+    }
+
+    /// True if a credential is already stored for `remote_url` (ADR 0015).
+    pub fn has_credential(&self, remote_url: &str) -> bool {
+        credentials::lookup_keychain_token(remote_url).is_some()
     }
 
     fn session(&self, session_id: &str) -> Result<SessionState, EngineError> {

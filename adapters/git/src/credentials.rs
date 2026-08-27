@@ -65,6 +65,15 @@ pub fn store_keychain_token(remote_url: &str, token: &str) -> Result<(), Reposit
         .map_err(|e| RepositoryError::Storage(format!("Failed to store token in keychain: {e}")))
 }
 
+pub fn delete_keychain_token(remote_url: &str) -> Result<(), RepositoryError> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, remote_url)
+        .map_err(|e| RepositoryError::Storage(format!("Failed to open keychain entry: {e}")))?;
+
+    entry
+        .delete_credential()
+        .map_err(|e| RepositoryError::Storage(format!("Failed to delete keychain entry: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

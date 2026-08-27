@@ -41,19 +41,31 @@ pub fn add_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, Engine
 pub fn remove_tag(&self, session_id: &str, tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn update_tag(&self, session_id: &str, old_tag: &str, new_tag: &str) -> Result<Vec<String>, EngineError>;
 pub fn sidecar_integrity_status(&self, entry_id: &str, sidecar_json: Option<&str>) -> SidecarIntegrityReport;
+
+// Credential store (ADR 0015). Per-remote, not session-scoped.
+pub fn store_credential(&self, remote_url: &str, secret: &str) -> Result<(), EngineError>;
+pub fn delete_credential(&self, remote_url: &str) -> Result<(), EngineError>;
+pub fn has_credential(&self, remote_url: &str) -> bool;
 ```
 
 ## Error Shape
 
 ```rust
-pub const PUBLIC_ERROR_CODES: [&str; 5] = [
-    "NOT_CONNECTED", "IO", "REPO", "VALIDATION", "CONFLICT",
+pub const PUBLIC_ERROR_CODES: [&str; 6] = [
+    "NOT_CONNECTED", "IO", "REPO", "VALIDATION", "CONFLICT", "AUTH_REQUIRED",
 ];
 
-pub struct EngineErrorDto { pub code: String, pub message: String }
+pub struct EngineErrorDto {
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_remote: Option<String>, // set iff code == "AUTH_REQUIRED"
+}
 ```
 
 `code` is the contract; `message` is diagnostics only (ADR 0009).
+`auth_remote` is the structured prompt target for `AUTH_REQUIRED`
+(ADR 0015).
 
 ## Sync Report
 
@@ -86,7 +98,8 @@ pub struct JournalStatus {
 
 All calls are synchronous. Anything named sync/pull/push/clone performs
 network I/O and must run on a worker thread (see ENGINE_API.md
-"Threading Contract"). Everything else is local disk only.
+"Threading Contract"). Credential-store methods do OS keychain IPC;
+keep them off the UI thread too. Everything else is local disk only.
 
 ## Storage Layout
 
